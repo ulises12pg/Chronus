@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chronus 17.5 - Final Stable Fix</title>
+    
+    <!-- Librerías -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap');
+        body { font-family: 'Inter', sans-serif; -webkit-user-select: none; user-select: none; overflow-x: hidden; }
+        .font-mono { font-family: 'JetBrains+Mono', monospace; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .modal-anim { animation: zoomIn 0.2s ease-out forwards; }
+        @keyframes zoomIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        .btn-press { transition: transform 0.1s; }
+        .btn-press:active { transform: scale(0.95); }
+        .progress-bar-stripe { background-image: linear-gradient(45deg,rgba(255,255,255,.15) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.15) 50%,rgba(255,255,255,.15) 75%,transparent 75%,transparent); background-size: 1rem 1rem; }
+    </style>
+</head>
+<body class="bg-slate-200">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        // --- 1. CONSTANTES GLOBALES ---
+        const ICONS = ['Box', 'FileText', 'Printer', 'Copy', 'Scan', 'Coffee', 'Smartphone', 'Headphones', 'Mouse', 'Keyboard', 'Monitor', 'Wifi', 'Zap', 'Star', 'Tag', 'Gift', 'PenTool', 'Paperclip', 'Scissors'];
+        
+        const DEFAULTS = {
+            CONFIG: {
+                EMPRESA: "CIBER CENTRO PROGRESO", RFC: "XAXX010101000", REGIMEN: "Simplificado", 
+                LUGAR_EXPEDICION: "Hidalgo", SISTEMA_VERSION: "Chronus 17.5", COLOR_CORP: "bg-slate-900",
+                TICKET_FORMAT: "TICKET", MIN_CHARGE_TIME: 3, MIN_CHARGE_AMOUNT: 5.00
+            },
+            PRINT: {
+                prices: { BN: { CARTA: 2, OFICIO: 3, TABLOIDE: 10 }, COLOR: { CARTA: 5, OFICIO: 8, TABLOIDE: 15 } },
+                multipliers: { TEXTO: 1, IMAGEN: 1.5, FULL: 2.5 }
+            }
+        };
+
+        const POINTS_PER_PESO = 10; 
+        const POINTS_REDEEM_THRESHOLD = 5000; 
+        const DISCOUNT_VALUE = 50; 
+
+        // --- 2. FUNCIONES GLOBALES ---
+        const generateUID = () => Date.now().toString(36) + Math.random().toString(36).substr(2);
+
+        const calculateRentAmount = (eq, config) => {
+            if (!eq || eq.estado === 'libre') return 0;
+            let ms = eq.tiempoAcumulado || 0;
+            if (eq.estado === 'ocupado' && eq.inicio) ms += (Date.now() - eq.inicio);
+            
+            const hours = ms / 3600000;
+            let total = hours * eq.precioHora;
+            
+            if ((ms / 60000) > config.MIN_CHARGE_TIME && total < config.MIN_CHARGE_AMOUNT) {
+                total = config.MIN_CHARGE_AMOUNT;
+            }
+            return total;
+        };
+
+        const numeroALetras = (amount) => {
+            const entero = Math.floor(amount);
+            const centavos = Math.round((amount - entero) * 100);
+            return `${entero} PESOS ${centavos.toString().padStart(2, '0')}/100 M.N.`; 
+        };
+
+        // --- 3. MOTOR DE AUDIO ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const playSound = (type) => {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            const now = audioCtx.currentTime;
+
+            if (type === 'click') {
+                osc.type = 'sine'; osc.frequency.setValueAtTime(600, now); osc.frequency.exponentialRampToValueAtTime(300, now + 0.1);
+                gain.gain.setValueAtTime(0.05, now); gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                osc.start(now); osc.stop(now + 0.1);
+            } else if (type === 'scan') {
+                osc.type = 'square'; osc.frequency.setValueAtTime(1200, now); 
+                gain.gain.setValueAtTime(0.05, now); gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                osc.start(now); osc.stop(now + 0.1);
+            } else if (type === 'success') {
+                osc.type = 'triangle'; osc.frequency.setValueAtTime(400, now); osc.frequency.setValueAtTime(600, now + 0.1);
+                gain.gain.setValueAtTime(0.1, now); gain.gain.linearRampToValueAtTime(0, now + 0.3);
+                osc.start(now); osc.stop(now + 0.3);
+            } else if (type === 'error') {
+                osc.type = 'sawtooth'; osc.frequency.setValueAtTime(150, now); 
+                gain.gain.setValueAtTime(0.1, now); gain.gain.linearRampToValueAtTime(0, now + 0.3);
+                osc.start(now); osc.stop(now + 0.3);
+            } else if (type === 'open') {
+                osc.type = 'sine'; osc.frequency.setValueAtTime(300, now); osc.frequency.linearRampToValueAtTime(500, now + 0.2);
+                gain.gain.setValueAtTime(0.05, now); gain.gain.linearRampToValueAtTime(0, now + 0.2);
+                osc.start(now); osc.stop(now + 0.2);
+            }
+        };
+
+        // --- 4. COMPONENTES BASE ---
+        const Icon = ({ name, size = 20, className = "" }) => {
+            const ref = useRef(null);
+            useEffect(() => {
+                if (window.lucide && ref.current) {
+                    const iconName = name.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+                    ref.current.innerHTML = '';
+                    const i = document.createElement('i');
+                    i.setAttribute('data-lucide', iconName);
+                    if (className) i.className = className;
+                    ref.current.appendChild(i);
+                    window.lucide.createIcons({ root: ref.current, nameAttr: 'data-lucide', attrs: { width: size, height: size } });
+                }
+            }, [name, className, size]);
+            return <span ref={ref} className="inline-flex items-center justify-center"></span>;
+        };
+
+        const Modal = ({ children, onClose }) => (
+            <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 modal-anim">
+                {children}
+            </div>
+        );
+
+        const LoyaltyBar = ({ currentPoints, pendingAmount }) => {
+            const pendingPoints = Math.floor(pendingAmount * POINTS_PER_PESO);
+            const totalPoints = currentPoints + pendingPoints;
+            const percent = Math.min(100, (totalPoints / POINTS_REDEEM_THRESHOLD) * 100);
+            const isEligible = totalPoints >= POINTS_REDEEM_THRESHOLD;
+
+            return (
+                <div className="bg-white p-4 rounded-2xl border border-indigo-100 shadow-sm mb-4">
+                    <div className="flex justify-between items-center mb-2">
+                        <span className="text-[10px] font-black uppercase text-slate-500 tracking-widest flex items-center gap-2">
+                            <Icon name="Star" size={14} className="text-yellow-500 fill-current"/> Puntos Cliente
+                        </span>
+                        <span className="text-xs font-bold text-indigo-600">{totalPoints} / {POINTS_REDEEM_THRESHOLD}</span>
+                    </div>
+                    <div className="h-3 w-full bg-slate-100 rounded-full overflow-hidden relative">
+                        <div className={`h-full transition-all duration-500 ease-out flex items-center justify-center ${isEligible ? 'bg-gradient-to-r from-yellow-400 to-orange-500' : 'bg-indigo-500'}`} style={{width: `${percent}%`}}>
+                            {isEligible && <div className="w-full h-full progress-bar-stripe opacity-30 animate-pulse"></div>}
+                        </div>
+                    </div>
+                    {isEligible && <div className="text-[9px] text-orange-500 font-bold mt-2 text-center uppercase animate-pulse">¡Descuento disponible!</div>}
+                </div>
+            );
+        };
+
+        // --- 5. COMPONENTES DE NEGOCIO ---
+        const LoginScreen = ({ onLogin, usuarios, config }) => {
+            const [pin, setPin] = useState('');
+            const [error, setError] = useState(false);
+            
+            useEffect(() => {
+                const hk = (e) => { 
+                    if (e.key >= '0' && e.key <= '9') { playSound('click'); if(pin.length<4) handlePin(e.key); } 
+                    else if(e.key==='Backspace') { playSound('click'); setPin(p=>p.slice(0,-1)); } 
+                };
+                window.addEventListener('keydown', hk); return () => window.removeEventListener('keydown', hk);
+            }, [pin]);
+
+            const handlePin = (val) => {
+                const newPin = pin + val;
+                setPin(newPin);
+                if (newPin.length === 4) {
+                    const user = usuarios.find(u => u.pin === newPin);
+                    if (user) { playSound('success'); onLogin(user); }
+                    else { playSound('error'); setError(true); setTimeout(() => { setPin(''); setError(false); }, 1000); }
+                }
+            };
+            return (
+                <div className="fixed inset-0 bg-slate-900 flex items-center justify-center p-4">
+                    <div className="bg-white p-8 rounded-3xl w-full max-w-sm text-center shadow-2xl">
+                        <div className="bg-slate-100 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6"><Icon name="Aperture" size={48} className="text-indigo-600"/></div>
+                        <h2 className="text-2xl font-black text-slate-800 tracking-tight">{config.EMPRESA}</h2>
+                        <p className="text-xs text-slate-400 mt-1 uppercase tracking-widest mb-8">Acceso Seguro</p>
+                        <div className="flex justify-center gap-4 mb-8">{[0,1,2,3].map(i=><div key={i} className={`w-3 h-3 rounded-full ${pin.length>i?'bg-indigo-600':'bg-slate-200'} ${error?'bg-rose-500':''}`}></div>)}</div>
+                        <div className="grid grid-cols-3 gap-3">
+                            {[1,2,3,4,5,6,7,8,9].map(n=><button key={n} onClick={()=>{playSound('click');handlePin(n.toString())}} className="h-14 rounded-xl bg-slate-50 font-bold text-lg hover:bg-slate-100 btn-press">{n}</button>)}
+                            <button onClick={()=>{playSound('click');setPin('')}} className="h-14 rounded-xl bg-rose-50 text-rose-600 font-bold btn-press">C</button>
+                            <button onClick={()=>{playSound('click');handlePin('0')}} className="h-14 rounded-xl bg-slate-50 font-bold text-lg hover:bg-slate-100 btn-press">0</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const PrintCalculator = ({ onAdd, settings }) => {
+            const [cfg, setCfg] = useState({ tipo: 'BN', tamano: 'CARTA', cobertura: 'TEXTO', cantidad: 1 });
+            const price = (settings.prices[cfg.tipo][cfg.tamano] || 0) * (settings.multipliers[cfg.cobertura] || 1);
+            return (
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm mb-4">
+                    <h4 className="text-xs font-black text-slate-500 uppercase mb-3 flex gap-2"><Icon name="Printer" size={14}/> Impresión</h4>
+                    <div className="flex gap-2 mb-3"><div className="flex-1 bg-slate-100 p-1 rounded-lg flex">{['BN','COLOR'].map(t=><button key={t} onClick={()=>{playSound('click');setCfg({...cfg, tipo:t})}} className={`flex-1 py-1 rounded text-[10px] font-bold ${cfg.tipo===t?'bg-white shadow text-indigo-600':'text-slate-400'}`}>{t}</button>)}</div></div>
+                    <div className="flex gap-2 mb-3"><div className="flex-1 bg-slate-100 p-1 rounded-lg flex">{['CARTA','OFICIO'].map(t=><button key={t} onClick={()=>{playSound('click');setCfg({...cfg, tamano:t})}} className={`flex-1 py-1 rounded text-[10px] font-bold ${cfg.tamano===t?'bg-white shadow text-indigo-600':'text-slate-400'}`}>{t}</button>)}</div></div>
+                    <select className="w-full text-xs p-2 border rounded-lg mb-3 font-bold outline-none" value={cfg.cobertura} onChange={e=>setCfg({...cfg, cobertura:e.target.value})}><option value="TEXTO">Texto</option><option value="IMAGEN">Imagen</option><option value="FULL">Full Color</option></select>
+                    <button onClick={()=>onAdd({...cfg, price})} className="w-full bg-slate-800 text-white py-2 rounded-xl font-bold text-xs flex justify-between px-4 hover:bg-black btn-press"><span>AGREGAR</span><span>${price.toFixed(2)}</span></button>
+                </div>
+            );
+        };
+
+        const InventoryModule = ({ onClose, catalogo, setCatalogo, notify }) => {
+            const [form, setForm] = useState({ id: null, nombre: '', precio: '', stock: '', codigo: '', categoria: '', icon: 'Box' });
+            const [search, setSearch] = useState('');
+            const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+
+            const guardar = () => {
+                if (!form.nombre || !form.precio) { playSound('error'); return notify('Datos incompletos', 'error'); }
+                const prod = { ...form, id: form.id || Date.now(), precio: parseFloat(form.precio), stock: parseInt(form.stock)||0 };
+                if (form.id) setCatalogo(prev => prev.map(p => p.id === form.id ? prod : p));
+                else setCatalogo(prev => [...prev, prod]);
+                setForm({ id: null, nombre: '', precio: '', stock: '', codigo: '', categoria: '', icon: 'Box' });
+                playSound('success'); notify('Guardado');
+            };
+
+            const confirmarEliminar = () => {
+                setCatalogo(prev => prev.filter(p => p.id !== confirmDeleteId));
+                if (form.id === confirmDeleteId) setForm({ id: null, nombre: '', precio: '', stock: '', codigo: '', categoria: '', icon: 'Box' });
+                setConfirmDeleteId(null);
+                playSound('success'); notify('Eliminado');
+            };
+
+            return (
+                <Modal onClose={onClose}>
+                    <div className="bg-white rounded-3xl w-full max-w-5xl h-[85vh] flex overflow-hidden shadow-2xl relative">
+                         {confirmDeleteId && (
+                            <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                                <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center">
+                                    <div className="mx-auto w-12 h-12 bg-rose-100 rounded-full flex items-center justify-center text-rose-600 mb-4"><Icon name="AlertTriangle" size={24}/></div>
+                                    <h3 className="font-black text-lg mb-2">¿Eliminar Producto?</h3>
+                                    <div className="flex gap-2">
+                                        <button onClick={()=>setConfirmDeleteId(null)} className="flex-1 py-2 rounded-xl font-bold text-slate-500 hover:bg-slate-100">Cancelar</button>
+                                        <button onClick={confirmarEliminar} className="flex-1 py-2 rounded-xl font-bold bg-rose-600 text-white hover:bg-rose-700">Eliminar</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-slate-100 rounded-full hover:bg-slate-200 z-10"><Icon name="X"/></button>
+                        <div className="w-1/3 bg-slate-50 p-6 border-r overflow-y-auto">
+                            <h3 className="font-black text-xl mb-4 text-slate-800">{form.id ? 'Editar' : 'Nuevo'}</h3>
+                            <div className="space-y-3">
+                                <input className="w-full p-3 rounded-xl border outline-none focus:border-indigo-500" placeholder="Nombre" value={form.nombre || ''} onChange={e=>setForm({...form, nombre:e.target.value})}/>
+                                <div className="flex gap-2"><input type="number" className="w-1/2 p-3 rounded-xl border outline-none" placeholder="Precio" value={form.precio || ''} onChange={e=>setForm({...form, precio:e.target.value})}/><input type="number" className="w-1/2 p-3 rounded-xl border outline-none" placeholder="Stock" value={form.stock !== undefined ? form.stock : ''} onChange={e=>setForm({...form, stock:e.target.value})}/></div>
+                                <input className="w-full p-3 rounded-xl border outline-none" placeholder="Categoría" value={form.categoria || ''} onChange={e=>setForm({...form, categoria:e.target.value})}/>
+                                <input className="w-full p-3 rounded-xl border outline-none font-mono" placeholder="Código" value={form.codigo || ''} onChange={e=>setForm({...form, codigo:e.target.value})}/>
+                                <div className="grid grid-cols-6 gap-2 bg-white p-2 rounded-xl border h-32 overflow-y-auto custom-scrollbar">{ICONS.map(ic => <button key={ic} onClick={()=>{playSound('click');setForm({...form, icon:ic})}} className={`p-1 rounded ${form.icon===ic?'bg-indigo-100 text-indigo-600':''}`}><Icon name={ic} size={16}/></button>)}</div>
+                                <div className="flex gap-2 pt-2">{form.id && <button onClick={()=>setConfirmDeleteId(form.id)} className="p-3 bg-rose-100 text-rose-600 rounded-xl"><Icon name="Trash2"/></button>}<button onClick={guardar} className="flex-1 bg-indigo-600 text-white rounded-xl font-bold py-3 hover:bg-indigo-700 btn-press">GUARDAR</button></div>
+                            </div>
+                        </div>
+                        <div className="flex-1 p-6 flex flex-col bg-white">
+                            <div className="flex justify-between items-center mb-4"><h2 className="font-black text-2xl">Catálogo</h2><input className="border-2 border-slate-100 p-2 rounded-xl text-sm font-bold w-64 outline-none focus:border-indigo-300" placeholder="Buscar..." value={search} onChange={e=>setSearch(e.target.value)}/></div>
+                            <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar">{catalogo.filter(p=>p.nombre.toLowerCase().includes(search.toLowerCase())).map(p => (<div key={p.id} onClick={()=>{playSound('click');setForm(p)}} className="p-3 border rounded-xl flex justify-between items-center hover:bg-slate-50 cursor-pointer group"><div className="flex items-center gap-3"><span className="p-2 bg-slate-100 rounded-lg text-slate-400 group-hover:text-indigo-600"><Icon name={p.icon || 'Box'}/></span><span className="font-bold text-slate-700">{p.nombre}</span></div><div className="flex items-center gap-4"><div className="font-black text-indigo-600">${p.precio.toFixed(2)}</div><button onClick={(e)=>{e.stopPropagation(); setConfirmDeleteId(p.id);}} className="text-rose-300 hover:text-rose-500"><Icon name="Trash2" size={16}/></button></div></div>))}</div>
+                        </div>
+                    </div>
+                </Modal>
+            );
+        };
+
+        const SalesModule = ({ onClose, catalogo, onCobrar, servicios, clientes, setClientes }) => {
+            const [carrito, setCarrito] = useState([]);
+            const [search, setSearch] = useState('');
+            const [activeClient, setActiveClient] = useState(1);
+            const [tab, setTab] = useState('catalogo');
+            
+            const add = (p) => { playSound('scan'); setCarrito(prev => { const ex = prev.find(i=>i.id===p.id); return ex ? prev.map(i=>i.id===p.id ? {...i, cantidad: i.cantidad+1} : i) : [...prev, {...p, cantidad: 1, uid: generateUID()}]; }); };
+            const total = carrito.reduce((a,b)=>a+(b.precio*b.cantidad),0);
+            
+            const handleCobrar = () => { onCobrar({id: 'MOSTRADOR', cuenta: carrito, clienteId: activeClient}); };
+            const selectedClient = clientes.find(c => c.id === parseInt(activeClient));
+
+            return (
+                <Modal onClose={onClose}>
+                    <div className="bg-white rounded-3xl w-full max-w-6xl h-[85vh] flex overflow-hidden shadow-2xl relative">
+                        <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-slate-100 rounded-full z-10 hover:bg-rose-100"><Icon name="X"/></button>
+                        <div className="flex-1 bg-slate-50 p-6 flex flex-col">
+                            <h2 className="text-2xl font-black mb-4 flex gap-2 items-center"><Icon name="ShoppingBag"/> Mostrador</h2>
+                            <div className="flex gap-2 mb-4 bg-slate-200 p-1 rounded-xl self-start">
+                                <button onClick={()=>{playSound('click');setTab('catalogo')}} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${tab==='catalogo'?'bg-white shadow text-indigo-600':'text-slate-500'}`}>Catálogo</button>
+                                <button onClick={()=>{playSound('click');setTab('servicios')}} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${tab==='servicios'?'bg-white shadow text-indigo-600':'text-slate-500'}`}>Servicios</button>
+                            </div>
+                            
+                            {tab === 'catalogo' ? (
+                                <div className="flex-1 flex flex-col overflow-hidden">
+                                    <input className="w-full p-4 rounded-2xl border-2 border-white shadow-sm mb-4 outline-none font-bold" placeholder="Buscar producto..." value={search} onChange={e=>setSearch(e.target.value)} autoFocus/>
+                                    <div className="flex-1 overflow-y-auto grid grid-cols-3 gap-3 content-start custom-scrollbar">{catalogo.filter(p=>p.nombre.toLowerCase().includes(search.toLowerCase())).map(p => (<button key={p.id} onClick={()=>add(p)} className="bg-white p-4 rounded-2xl shadow-sm hover:shadow-md transition-all text-left group btn-press"><div className="flex justify-between items-start mb-2"><Icon name={p.icon} className="text-slate-400 group-hover:text-indigo-600"/> <span className="font-black text-indigo-600">${p.precio}</span></div><div className="font-bold text-sm text-slate-700 leading-tight">{p.nombre}</div><div className="text-[10px] text-slate-400 font-mono mt-1">{p.codigo}</div></button>))}</div>
+                                </div>
+                            ) : (
+                                <div className="flex-1 overflow-y-auto grid grid-cols-4 gap-4 content-start custom-scrollbar">
+                                    {servicios.map(s => (
+                                        <button key={s.id} onClick={()=>add(s)} className="bg-white p-5 rounded-2xl border hover:border-indigo-500 hover:shadow-lg transition-all flex flex-col items-center gap-3 group">
+                                            <div className="w-12 h-12 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600 group-hover:scale-110 transition-transform"><Icon name={s.icon} size={24}/></div>
+                                            <div className="text-center"><div className="font-bold text-sm text-slate-700">{s.nombre}</div><div className="font-black text-indigo-600">${s.precio}</div></div>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                        <div className="w-96 bg-white border-l p-6 flex flex-col shadow-xl z-20">
+                            <div className="flex justify-between items-center mb-4"><h3 className="font-black text-xl">Ticket</h3><button onClick={onClose} className="text-xs font-bold text-slate-400 hover:text-slate-600 bg-slate-100 px-3 py-1 rounded">CERRAR</button></div>
+                            <div className="mb-4"><label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Cliente</label><select className="w-full p-2 border rounded-xl text-sm font-bold bg-slate-50 outline-none" value={activeClient} onChange={e=>setActiveClient(e.target.value)}>{clientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div>
+                            {selectedClient && selectedClient.id !== 1 && <LoyaltyBar currentPoints={selectedClient.puntos || 0} pendingAmount={total} />}
+                            <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar">{carrito.map(item => (<div key={item.uid} className="flex justify-between items-center p-2 border-b"><div className="text-xs"><div className="font-bold">{item.nombre}</div><div className="text-indigo-600">{item.cantidad} x ${item.precio}</div></div><button onClick={()=>{playSound('click');setCarrito(c=>c.filter(x=>x.uid!==item.uid))}} className="text-rose-400"><Icon name="Trash2" size={14}/></button></div>))}</div>
+                            <div className="pt-4 border-t mt-4"><div className="flex justify-between items-end mb-4"><span className="text-slate-400 font-bold text-xs uppercase">Total</span><span className="text-3xl font-black text-slate-800">${total.toFixed(2)}</span></div><button onClick={handleCobrar} disabled={!carrito.length} className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-black shadow-lg disabled:opacity-50 hover:bg-emerald-700 btn-press">COBRAR</button></div>
+                        </div>
+                    </div>
+                </Modal>
+            );
+        };
+
+        const AdminModule = ({ onClose, config, setConfig, equipos, setEquipos, usuarios, setUsuarios, clientes, setClientes, servicios, setServicios, onExport, onImport }) => {
+            const [tab, setTab] = useState('general');
+            const [svcForm, setSvcForm] = useState({ id: null, nombre: '', precio: '', icon: 'Star' });
+            
+            const guardarServicio = () => {
+                if(!svcForm.nombre || !svcForm.precio) return;
+                const nuevo = { ...svcForm, id: svcForm.id || Date.now(), precio: parseFloat(svcForm.precio) };
+                if(svcForm.id) setServicios(prev => prev.map(s => s.id === svcForm.id ? nuevo : s));
+                else setServicios(prev => [...prev, nuevo]);
+                setSvcForm({ id: null, nombre: '', precio: '', icon: 'Star' });
+            };
+
+            return (
+                <Modal onClose={onClose}>
+                    <div className="bg-white w-full max-w-5xl h-[80vh] rounded-3xl flex overflow-hidden shadow-2xl relative">
+                        <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-slate-100 rounded-full hover:bg-rose-100 z-10"><Icon name="X"/></button>
+                        <div className="w-64 bg-slate-50 border-r p-6 flex flex-col">
+                            <h3 className="font-black text-xl mb-6 flex gap-2 items-center"><Icon name="Settings" className="text-indigo-600"/> Admin</h3>
+                            <nav className="space-y-1 flex-1 overflow-y-auto custom-scrollbar">
+                                <div className="mb-4">
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 px-2">Operativo</p>
+                                    {['general','equipos','clientes','servicios'].map(t => (
+                                        <button key={t} onClick={()=>{playSound('click');setTab(t)}} className={`w-full text-left px-4 py-3 rounded-xl font-bold text-sm capitalize mb-1 ${tab===t?'bg-indigo-600 text-white shadow-md':'text-slate-500 hover:bg-slate-200'}`}>
+                                            {t}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="pt-4 border-t border-slate-200">
+                                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 px-2">Sistema</p>
+                                     {['formatos','respaldo','usuarios'].map(t => (
+                                        <button key={t} onClick={()=>{playSound('click');setTab(t)}} className={`w-full text-left px-4 py-3 rounded-xl font-bold text-sm capitalize mb-1 ${tab===t?'bg-slate-800 text-white shadow-md':'text-slate-600 hover:bg-slate-300'}`}>
+                                            {t}
+                                        </button>
+                                    ))}
+                                </div>
+                            </nav>
+                        </div>
+                        <div className="flex-1 p-8 overflow-y-auto custom-scrollbar">
+                            {tab === 'general' && (
+                                <div className="space-y-4 max-w-md">
+                                    <h2 className="text-2xl font-black mb-4">Datos Generales</h2>
+                                    <div><label className="text-xs font-bold text-slate-400">Nombre Empresa</label><input className="w-full border-2 p-3 rounded-xl font-bold outline-none" value={config.EMPRESA} onChange={e=>setConfig({...config, EMPRESA:e.target.value})}/></div>
+                                    <div><label className="text-xs font-bold text-slate-400">Régimen Fiscal</label><input className="w-full border-2 p-3 rounded-xl font-bold outline-none" value={config.REGIMEN} onChange={e=>setConfig({...config, REGIMEN:e.target.value})}/></div>
+                                    <div><label className="text-xs font-bold text-slate-400">Lugar Expedición</label><input className="w-full border-2 p-3 rounded-xl font-bold outline-none" value={config.LUGAR_EXPEDICION} onChange={e=>setConfig({...config, LUGAR_EXPEDICION:e.target.value})}/></div>
+                                    <div className="flex gap-4"><div><label className="text-[10px] font-bold text-slate-400 uppercase">Mínimo ($)</label><input type="number" className="w-full border-2 p-3 rounded-xl font-bold outline-none" value={config.MIN_CHARGE_AMOUNT} onChange={e=>setConfig({...config, MIN_CHARGE_AMOUNT:parseFloat(e.target.value)})}/></div></div>
+                                </div>
+                            )}
+                            {tab === 'servicios' && (<div className="flex gap-6"><div className="w-1/3 bg-slate-50 p-4 rounded-2xl border"><h4 className="font-black mb-4">{svcForm.id ? 'Editar' : 'Nuevo'} Servicio</h4><input className="w-full p-2 mb-2 rounded border" placeholder="Nombre" value={svcForm.nombre} onChange={e=>setSvcForm({...svcForm, nombre:e.target.value})}/><input className="w-full p-2 mb-2 rounded border" type="number" placeholder="Precio" value={svcForm.precio} onChange={e=>setSvcForm({...svcForm, precio:e.target.value})}/><div className="grid grid-cols-5 gap-2 mb-4 h-32 overflow-y-auto bg-white p-2 rounded border">{ICONS.map(ic => <button key={ic} onClick={()=>setSvcForm({...svcForm, icon:ic})} className={`p-1 rounded ${svcForm.icon===ic?'bg-indigo-100 text-indigo-600':''}`}><Icon name={ic} size={16}/></button>)}</div><div className="flex gap-2">{svcForm.id && <button onClick={()=>{setServicios(prev=>prev.filter(s=>s.id!==svcForm.id)); setSvcForm({ id: null, nombre: '', precio: '', icon: 'Star' })}} className="p-2 bg-rose-100 text-rose-600 rounded-lg"><Icon name="Trash2"/></button>}<button onClick={guardarServicio} className="flex-1 bg-indigo-600 text-white rounded-lg font-bold py-2">Guardar</button></div></div><div className="flex-1 grid grid-cols-2 gap-3 content-start">{servicios.map(s => (<div key={s.id} onClick={()=>setSvcForm(s)} className="p-4 border rounded-xl flex items-center gap-4 cursor-pointer hover:bg-slate-50"><div className="p-2 bg-indigo-50 rounded-lg text-indigo-600"><Icon name={s.icon}/></div><div><div className="font-bold">{s.nombre}</div><div className="text-xs text-slate-500">${s.precio}</div></div></div>))}</div></div>)}
+                            {tab === 'equipos' && (<div><div className="flex justify-between mb-4"><h2 className="text-2xl font-black">Terminales</h2><button onClick={()=>setEquipos([...equipos, {id: Date.now(), nombre: 'PC-Nueva', precioHora: 15, tipo: 'PC', cuenta: [], estado:'libre'}])} className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold text-xs">+ Agregar</button></div><div className="grid gap-3">{equipos.map(e => (<div key={e.id} className="p-4 border rounded-xl flex justify-between items-center"><input value={e.nombre} onChange={ev=>setEquipos(equipos.map(x=>x.id===e.id?{...x, nombre:ev.target.value}:x))} className="font-bold outline-none"/> <div className="flex items-center gap-2 text-xs font-bold text-indigo-600">$<input type="number" value={e.precioHora} onChange={ev=>setEquipos(equipos.map(x=>x.id===e.id?{...x, precio:parseFloat(ev.target.value)}:x))} className="w-12 border rounded p-1 text-center"/>/hr <button onClick={()=>setEquipos(equipos.filter(x=>x.id!==e.id))} className="text-rose-400 ml-2"><Icon name="Trash2" size={16}/></button></div></div>))}</div></div>)}
+                            {tab === 'usuarios' && (<div><div className="flex justify-between mb-4"><h2 className="text-2xl font-black">Usuarios</h2><button onClick={()=>setUsuarios([...usuarios, {id: Date.now(), nombre: 'Nuevo', pin: '0000', rol: 'empleado'}])} className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold text-xs">+ Agregar</button></div><div className="grid gap-3">{usuarios.map(u => (<div key={u.id} className="p-4 border rounded-xl flex justify-between items-center"><span className="font-bold">{u.nombre}</span> <span className="font-mono bg-slate-100 px-2 rounded">{u.pin}</span> <button onClick={()=>{if(u.id!==1)setUsuarios(usuarios.filter(x=>x.id!==u.id))}} className="text-rose-400"><Icon name="Trash2" size={16}/></button></div>))}</div></div>)}
+                            {tab === 'clientes' && (<div><div className="flex justify-between mb-4"><h2 className="text-2xl font-black">Clientes</h2><button onClick={()=>setClientes([...clientes, {id: Date.now(), nombre: 'Cliente', puntos: 0}])} className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold text-xs">+ Agregar</button></div><div className="grid gap-3">{clientes.map(c => (<div key={c.id} className="p-4 border rounded-xl flex justify-between items-center"><input className="font-bold outline-none" value={c.nombre} onChange={e=>setClientes(clientes.map(x=>x.id===c.id?{...x, nombre:e.target.value}:x))}/> <span className="font-mono bg-slate-100 px-2 rounded text-xs">{c.puntos} pts</span> <button onClick={()=>{if(c.id!==1)setClientes(clientes.filter(x=>x.id!==c.id))}} className="text-rose-400"><Icon name="Trash2" size={16}/></button></div>))}</div></div>)}
+                            {tab === 'formatos' && (<div><h2 className="text-2xl font-black mb-4">Formatos Ticket</h2><div className="flex gap-4"><button onClick={()=>setConfig({...config, TICKET_FORMAT:'TICKET'})} className={`p-4 border rounded-xl font-bold ${config.TICKET_FORMAT==='TICKET'?'bg-indigo-50 border-indigo-500':''}`}>Ticket 58mm</button><button onClick={()=>setConfig({...config, TICKET_FORMAT:'CARTA'})} className={`p-4 border rounded-xl font-bold ${config.TICKET_FORMAT==='CARTA'?'bg-indigo-50 border-indigo-500':''}`}>Carta PDF</button></div></div>)}
+                            {tab === 'respaldo' && (<div><h2 className="text-2xl font-black mb-4">Base de Datos</h2><div className="flex gap-4"><button onClick={onExport} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold">Descargar Respaldo</button><label className="bg-amber-500 text-white px-6 py-3 rounded-xl font-bold cursor-pointer">Restaurar<input type="file" className="hidden" onChange={onImport}/></label></div></div>)}
+                        </div>
+                    </div>
+                </Modal>
+            );
+        };
+
+        const ConsumptionModule = ({ onClose, terminal, catalogo, setEquipos, printSettings, notify, servicios, clientes, setClientes }) => {
+            const [search, setSearch] = useState('');
+            const [manual, setManual] = useState({ concepto: '', precio: '' });
+            
+            const addItem = (item) => { playSound('scan'); setEquipos(prev => prev.map(eq => eq.id === terminal.id ? { ...eq, cuenta: [...eq.cuenta, { ...item, uid: generateUID(), cantidad: 1 }] } : eq)); };
+            const removeItem = (uid) => { playSound('click'); setEquipos(prev => prev.map(eq => eq.id === terminal.id ? { ...eq, cuenta: eq.cuenta.filter(i => i.uid !== uid) } : eq)); };
+            const addPrint = (cfg) => addItem({ id: 'PRINT', nombre: `Imp. ${cfg.tipo} ${cfg.tamano}`, precio: cfg.price, icon: 'Printer' });
+            const addManual = () => { if(!manual.concepto || !manual.precio) return; addItem({ id: 'MAN', nombre: manual.concepto, precio: parseFloat(manual.precio), icon: 'PenTool' }); setManual({ concepto: '', precio: '' }); };
+
+            const totalCuenta = terminal.cuenta.reduce((a,b)=>a+(b.precio*b.cantidad),0);
+            // Calcular renta actual para barra de progreso
+            const now = Date.now();
+            let ms = terminal.tiempoAcumulado || 0;
+            if (terminal.estado === 'ocupado') ms += (now - terminal.inicio);
+            const rentaEstimada = (ms / 3600000) * terminal.precioHora;
+            const totalEstimado = totalCuenta + rentaEstimada;
+
+            const selectedClient = clientes.find(c => c.id === terminal.clienteId) || clientes[0];
+
+            return (
+                <Modal onClose={onClose}>
+                    <div className="bg-white w-full max-w-5xl h-[85vh] rounded-3xl flex overflow-hidden shadow-2xl relative">
+                        <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-slate-100 rounded-full z-10"><Icon name="X"/></button>
+                        <div className="flex-1 bg-slate-50 p-6 flex flex-col">
+                            <h2 className="text-2xl font-black text-slate-800 mb-6 flex items-center gap-2"><Icon name="Zap" className="text-indigo-600"/> Consumo: {terminal.nombre}</h2>
+                            <div className="flex gap-6 overflow-hidden">
+                                <div className="flex-1 flex flex-col overflow-hidden">
+                                    <div className="mb-4 overflow-x-auto flex gap-2 pb-2">
+                                        {servicios.map(s => (
+                                            <button key={s.id} onClick={()=>addItem(s)} className="bg-white p-3 rounded-xl border hover:border-indigo-400 flex flex-col items-center min-w-[80px] shadow-sm">
+                                                <Icon name={s.icon} className="text-indigo-500 mb-1"/>
+                                                <span className="text-[10px] font-bold truncate w-full text-center">{s.nombre}</span>
+                                                <span className="text-[10px] text-slate-400">${s.precio}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <input className="w-full bg-white p-4 rounded-xl border shadow-sm mb-4 font-bold outline-none" placeholder="Buscar in inventario..." value={search} onChange={e=>setSearch(e.target.value)}/><div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-2">{catalogo.filter(p=>p.nombre.toLowerCase().includes(search.toLowerCase())).map(p => (<button key={p.id} onClick={()=>addItem(p)} className="w-full bg-white p-3 rounded-xl border hover:border-indigo-400 flex justify-between items-center group transition-all text-left"><div className="flex items-center gap-3"><span className="bg-slate-100 p-2 rounded-lg text-slate-400"><Icon name={p.icon}/></span><span className="font-bold text-slate-700">{p.nombre}</span></div><span className="font-black text-indigo-600">${p.precio.toFixed(2)}</span></button>))}</div></div>
+                                <div className="w-80 flex flex-col gap-4 overflow-y-auto custom-scrollbar"><PrintCalculator onAdd={addPrint} settings={printSettings} currentPrice={0} /><div className="bg-white p-4 rounded-2xl border shadow-sm"><h4 className="text-xs font-black text-slate-400 uppercase mb-3">Cargo Manual</h4><div className="flex gap-2"><input className="flex-1 p-2 border rounded-lg text-sm font-bold" placeholder="Concepto" value={manual.concepto} onChange={e=>setManual({...manual, concepto:e.target.value})}/><input type="number" className="w-24 p-2 border rounded-lg text-sm font-bold" placeholder="$" value={manual.precio} onChange={e=>setManual({...manual, precio:e.target.value})}/><button onClick={addManual} className="bg-slate-800 text-white p-2 rounded-lg"><Icon name="Plus"/></button></div></div></div>
+                            </div>
+                        </div>
+                        <div className="w-96 bg-white border-l p-6 flex flex-col shadow-2xl z-10">
+                            <div className="flex justify-between items-center mb-4"><h3 className="font-black text-xl">Cuenta</h3></div>
+                            {selectedClient.id !== 1 && <LoyaltyBar currentPoints={selectedClient.puntos || 0} pendingAmount={totalEstimado} />}
+                            <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar bg-slate-50 p-2 rounded-xl border-inner mb-4">{terminal.cuenta.map(item => (<div key={item.uid} className="bg-white p-3 rounded-xl border flex justify-between items-center shadow-sm"><div className="text-xs font-bold text-slate-700 w-32 truncate">{item.nombre}</div><div className="flex items-center gap-3"><span className="font-black text-slate-800">${item.precio}</span><button onClick={()=>removeItem(item.uid)} className="text-rose-400 hover:text-rose-600"><Icon name="Trash2" size={14}/></button></div></div>))}</div>
+                            <button onClick={onClose} className="w-full bg-slate-800 text-white py-4 rounded-2xl font-black shadow-lg hover:bg-black transition-all">GUARDAR</button>
+                        </div>
+                    </div>
+                </Modal>
+            );
+        };
+
+        // --- 5. APP ---
+        function App() {
+            const [view, setView] = useState('login');
+            const [user, setUser] = useState(null);
+            
+            const [config, setConfig] = useState(() => JSON.parse(localStorage.getItem('pos_config')) || DEFAULTS.CONFIG);
+            const [printSettings, setPrintSettings] = useState(() => JSON.parse(localStorage.getItem('pos_print_settings')) || DEFAULTS.PRINT);
+            const [equipos, setEquipos] = useState(() => JSON.parse(localStorage.getItem('pos_equipos')) || [{id:1, nombre:'PC-01', precioHora:15, estado:'libre', cuenta:[], tipo:'PC'}]);
+            const [catalogo, setCatalogo] = useState(() => JSON.parse(localStorage.getItem('pos_catalogo')) || [{id:1, nombre:'Coca Cola', precio:18, icon:'Coffee', codigo:'75001'}]);
+            const [usuarios, setUsuarios] = useState(() => JSON.parse(localStorage.getItem('pos_usuarios')) || [{id:1, nombre:'Admin', pin:'1234', rol:'admin'}, {id:2, nombre:'Empleado', pin:'5678', rol:'empleado'}]);
+            const [clientes, setClientes] = useState(() => JSON.parse(localStorage.getItem('pos_clientes')) || [{id:1, nombre:'Publico General', puntos:0}]);
+            const [servicios, setServicios] = useState(() => JSON.parse(localStorage.getItem('pos_servicios_rapidos')) || [{id:101, nombre:'Impresión B/N', precio:2, icon:'FileText'}, {id:102, nombre:'Copia', precio:1, icon:'Copy'}]);
+            const [ventas, setVentas] = useState(() => JSON.parse(localStorage.getItem('pos_ventas')) || []);
+            const [caja, setCaja] = useState(() => JSON.parse(localStorage.getItem('pos_caja')) || { activa: false, fondo: 0, inicio: null });
+            
+            const [activeModal, setActiveModal] = useState(null);
+            const [targetId, setTargetId] = useState(null);
+            const [notif, setNotif] = useState(null);
+            const [carritoDirecto, setCarritoDirecto] = useState([]);
+            const [pagoCheckout, setPagoCheckout] = useState('');
+            const [applyDiscount, setApplyDiscount] = useState(false);
+            const [resetInfo, setResetInfo] = useState(null);
+            const [fondoInput, setFondoInput] = useState('');
+            const [dineroPrepago, setDineroPrepago] = useState('');
+            const [minCustom, setMinCustom] = useState('');
+
+            useEffect(() => { localStorage.setItem('pos_config', JSON.stringify(config)); }, [config]);
+            useEffect(() => { localStorage.setItem('pos_equipos', JSON.stringify(equipos)); }, [equipos]);
+            useEffect(() => { localStorage.setItem('pos_catalogo', JSON.stringify(catalogo)); }, [catalogo]);
+            useEffect(() => { localStorage.setItem('pos_clientes', JSON.stringify(clientes)); }, [clientes]);
+            useEffect(() => { localStorage.setItem('pos_usuarios', JSON.stringify(usuarios)); }, [usuarios]);
+            useEffect(() => { localStorage.setItem('pos_servicios_rapidos', JSON.stringify(servicios)); }, [servicios]);
+
+            useEffect(() => {
+                const interval = setInterval(() => setEquipos(p => p.map(e => e.estado==='ocupado' ? {...e, _tick:Date.now()} : e)), 1000);
+                return () => clearInterval(interval);
+            }, []);
+
+            const notify = (msg, type='info') => { setNotif({msg, type}); setTimeout(()=>setNotif(null), 3000); };
+            const iniciar = (id) => { setEquipos(p => p.map(e => e.id===id ? {...e, estado:'ocupado', inicio:Date.now(), cuenta:[]} : e)); notify('Iniciado'); };
+            const iniciarEquipo = (id, modo, limite) => { playSound('success'); setEquipos(p => p.map(e => e.id===id ? {...e, estado:'ocupado', inicio:Date.now(), modo, limite: limite*60000, cuenta:[]} : e)); notify('Iniciado Prepago'); setActiveModal(null); };
+            const iniciarEquipoPorDinero = (id, dinero) => {
+                const eq = equipos.find(e => e.id === id);
+                if (!eq) return;
+                const monto = parseFloat(dinero);
+                if (!monto || monto <= 0) return notify("Monto inválido", "error");
+                const minutos = (monto / eq.precioHora) * 60;
+                iniciarEquipo(id, 'prepago', minutos);
+            };
+
+            const pausar = (id) => { playSound('click'); setEquipos(p => p.map(e => e.id===id ? (e.estado==='ocupado' ? {...e, estado:'pausado', tiempoAcumulado:(e.tiempoAcumulado||0)+(Date.now()-e.inicio)} : {...e, estado:'ocupado', inicio:Date.now()}) : e)); };
+            
+            const prepararReinicio = (id) => {
+                const eq = equipos.find(e => e.id === id);
+                if(!eq) return;
+                const renta = calculateRentAmount({ ...eq, tiempoAcumulado: (eq.tiempoAcumulado || 0) + (eq.estado === 'ocupado' ? (Date.now() - eq.inicio) : 0), estado: eq.estado }, config);
+                const consumo = eq.cuenta.reduce((a,b)=>a+(b.precio*b.cantidad),0);
+                const total = Math.round(renta + consumo);
+                setResetInfo({ id, nombre: eq.nombre, deuda: total, advertencia: total > 10 });
+                setActiveModal('reset_confirm');
+            };
+
+            const ejecutarReinicio = () => {
+                 playSound('success');
+                 setEquipos(p => p.map(e => e.id===resetInfo.id ? {...e, estado:'libre', inicio:null, tiempoAcumulado:0, cuenta:[], modo: 'libre', limite: 0} : e));
+                 setActiveModal(null);
+                 notify('Terminal Reiniciada');
+            };
+            
+            const abrirCheckout = (id) => {
+                if(id !== 'MOSTRADOR') {
+                    const eq = equipos.find(e => e.id === id);
+                    if(eq && eq.estado === 'ocupado') pausar(id);
+                }
+                setTargetId(id); setPagoCheckout(''); setApplyDiscount(false); setActiveModal('checkout');
+                playSound('open');
+            };
+
+            const procesarCobro = (id) => {
+                abrirCheckout(id);
+            };
+
+            const confirmarCobro = () => {
+                 const eq = targetId === 'MOSTRADOR' ? { id: 'MOSTRADOR', cuenta: carritoDirecto } : equipos.find(e => e.id === targetId);
+                 if (!eq) return;
+                 let renta = 0;
+                 if(targetId !== 'MOSTRADOR') {
+                     // Si es prepago, la renta ya se cobró, así que es 0 para el checkout final de "extras"
+                     if (eq.modo === 'prepago') {
+                         renta = 0; 
+                     } else {
+                         renta = calculateRentAmount({ ...eq, tiempoAcumulado: (eq.tiempoAcumulado||0), estado: eq.estado }, config);
+                     }
+                 }
+                 const totalItems = eq.cuenta.reduce((a,b)=>a+(b.precio*b.cantidad),0);
+                 const totalRaw = renta + totalItems;
+                 let total = Math.round(totalRaw);
+                 
+                 // Aplicar descuento 10% si se seleccionó
+                 if(applyDiscount) {
+                     total = Math.round(totalRaw * 0.90);
+                 }
+
+                 const pago = parseFloat(pagoCheckout);
+
+                 if (pago < total) return notify('Monto insuficiente', 'error');
+                 
+                 const fecha = new Date().toISOString();
+                 const folio = `FOL-${Date.now()}`;
+                 
+                 // Actualizar Puntos
+                 const cId = targetId === 'MOSTRADOR' ? (eq.clienteId || 1) : eq.clienteId;
+                 const cliente = clientes.find(c => c.id === parseInt(cId)) || clientes[0];
+                 const puntosGanados = Math.floor(total * POINTS_PER_PESO);
+                 let nuevosPuntos = (cliente.puntos || 0) + puntosGanados;
+                 
+                 if(applyDiscount && cliente.id !== 1) {
+                     nuevosPuntos -= POINTS_REDEEM_THRESHOLD; // Restar los 5000 pts si se usó el descuento
+                 }
+
+                 if(cliente.id !== 1) {
+                     setClientes(prev => prev.map(c => c.id === cliente.id ? { ...c, puntos: nuevosPuntos } : c));
+                 }
+
+                 setVentas([...ventas, { id: Date.now(), total, items: eq.cuenta, fecha: new Date().toISOString(), folio, cliente: cliente.nombre, atendio: user.nombre }]);
+                 notify('Cobro registrado');
+                 playSound('success');
+                 
+                 // Generar PDF 
+                 try {
+                     const { jsPDF } = window.jspdf;
+                     if(config.TICKET_FORMAT === 'CARTA') {
+                        const doc = new jsPDF({ format: 'letter' });
+                        let y = 20;
+                        doc.setFontSize(22); doc.setFont(undefined, 'bold'); doc.text(config.EMPRESA, 105, y, { align: 'center' }); y+=10;
+                        doc.setFontSize(10); doc.setFont(undefined, 'normal');
+                        doc.text(`RFC: ${config.RFC}`, 105, y, { align: 'center' }); y+=5;
+                        doc.text(`REGIMEN: ${config.REGIMEN}`, 105, y, { align: 'center' }); y+=5;
+                        doc.text(`LUGAR: ${config.LUGAR_EXPEDICION}`, 105, y, { align: 'center' }); y+=15;
+                        doc.text(`Folio: ${folio}`, 20, y); doc.text(`Fecha: ${new Date(fecha).toLocaleString()}`, 140, y); y+=10;
+                        const body = [];
+                        if(renta > 0) body.push(['1', 'RENTA EQUIPO', `$${renta.toFixed(2)}`, `$${renta.toFixed(2)}`]);
+                        eq.cuenta.forEach(i => body.push([i.cantidad, i.nombre, `$${i.precio.toFixed(2)}`, `$${(i.precio*i.cantidad).toFixed(2)}`]));
+                        doc.autoTable({ startY: y, head: [['CANT.', 'DESC.', 'P.U.', 'IMPORTE']], body });
+                        y = doc.lastAutoTable.finalY + 10;
+                        doc.text(`TOTAL: $${total.toFixed(2)}`, 160, y, {align:'right'});
+                        doc.save(`Venta_${folio}.pdf`);
+                     } else {
+                        const doc = new jsPDF({ unit: 'mm', format: [58, 240] });
+                        let y = 10;
+                        doc.setFontSize(8); doc.text(config.EMPRESA, 29, y, { align: 'center', maxWidth: 50 }); y += 10;
+                        doc.setFontSize(6);
+                        doc.text(`RFC: ${config.RFC}`, 29, y, {align:'center'}); y+=3;
+                        doc.text(`Folio: ${folio}`, 2, y); y+=3;
+                        doc.text(new Date(fecha).toLocaleString(), 2, y); y+=6;
+                        if (renta > 0) { doc.text(`1 RENTA`, 2, y); doc.text(`$${renta.toFixed(2)}`, 56, y, {align:'right'}); y+=4; }
+                        eq.cuenta.forEach(i => {
+                            doc.text(`${i.cantidad} ${i.nombre.slice(0,15)}`, 2, y);
+                            doc.text(`$${(i.precio*i.cantidad).toFixed(2)}`, 56, y, {align:'right'});
+                            y+=4;
+                        });
+                        doc.setFontSize(10); doc.setFont(undefined, 'bold');
+                        doc.text(`TOTAL: $${total.toFixed(2)}`, 56, y+5, {align:'right'});
+                        doc.save(`Ticket_${folio}.pdf`);
+                     }
+                 } catch(e) { console.error(e); notify('Error PDF', 'error'); }
+
+                 if(targetId==='MOSTRADOR') setCarritoDirecto([]);
+                 else setEquipos(p => p.map(e => e.id === targetId ? {...e, estado:'libre', inicio:null, tiempoAcumulado:0, cuenta:[], modo: 'libre', limite: 0} : e));
+                 setActiveModal(null);
+            };
+
+            const mover = (oId, dId) => {
+                setEquipos(prev => {
+                    const org = prev.find(e=>e.id===oId); const dst = prev.find(e=>e.id===dId);
+                    let ms = org.tiempoAcumulado||0; if(org.estado==='ocupado') ms+=(Date.now()-org.inicio);
+                    const dinero = (ms/3600000)*org.precioHora;
+                    const msDst = (dinero/dst.precioHora)*3600000;
+                    return prev.map(e => {
+                        if(e.id===dId) return {...dst, estado:'ocupado', inicio:Date.now(), tiempoAcumulado:msDst, cuenta:[...dst.cuenta,...org.cuenta], clienteId: org.clienteId, modo: org.modo, limite: org.limite};
+                        if(e.id===oId) return {...org, estado:'libre', inicio:null, tiempoAcumulado:0, cuenta:[], clienteId: 1, modo: 'libre', limite: 0};
+                        return e;
+                    });
+                });
+                setActiveModal(null); notify('Movido');
+            };
+
+            const abrirCaja = (fondo) => {
+                const f = parseFloat(fondo) || 0;
+                setCaja({ activa: true, fondo: f, inicio: new Date().toISOString() });
+                setModal(null); setFondoInput(''); toast("Caja Abierta");
+            };
+
+            const cerrarTurno = () => {
+                if(!confirm("¿Cerrar turno?")) return;
+                setCaja({ activa: false, fondo: 0, inicio: null }); setModal(null); toast("Turno Cerrado");
+            };
+
+            // Acciones de Respaldo y Restauración
+            const exportarDatos = () => {
+                const blob = new Blob([JSON.stringify({ config, printSettings, usuarios, equipos, catalogo, clientes, ventas, caja, servicios, carritoDirecto })], { type: "application/json" });
+                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `backup_chronus_${Date.now()}.json`; a.click();
+            };
+            const restaurarDatos = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (evt) => {
+                    const d = JSON.parse(evt.target.result);
+                    if(confirm("¿Restaurar respaldo?")) { 
+                        if(d.config) setConfig(d.config);
+                        if(d.catalogo) setCatalogo(d.catalogo);
+                        if(d.usuarios) setUsuarios(d.usuarios);
+                        if(d.equipos) setEquipos(d.equipos);
+                        if(d.servicios) setServicios(d.servicios);
+                        if(d.clientes) setClientes(d.clientes);
+                        toast("Restaurado"); 
+                    }
+                };
+                reader.readAsText(file);
+            };
+            
+            const setModal = (name) => {
+                // Interceptores de seguridad
+                if (name === 'inventory' || name === 'sales' || name === 'move' || name === 'consumption' || name === 'checkout') {
+                    if (!caja.activa) {
+                         // Si la caja NO está activa, obligar a abrirla
+                         playSound('error');
+                         notify("¡Debes abrir la caja primero!", 'error');
+                         setActiveModal('abrir_caja');
+                         return;
+                    }
+                }
+                setActiveModal(name);
+            };
+
+
+            if (view === 'login') return <LoginScreen onLogin={u=>{setUser(u); setView('app');}} usuarios={usuarios} config={config}/>;
+
+            return (
+                <div className="min-h-screen flex flex-col bg-slate-200 font-sans text-slate-800">
+                    <nav className="bg-slate-900 text-white px-6 h-16 flex items-center justify-between shadow-xl sticky top-0 z-40">
+                        <div className="flex items-center gap-3"><Icon name="Aperture" className="text-indigo-400"/> {config.EMPRESA}</div>
+                        <div className="flex gap-2">
+                            {user.rol==='admin' && <><button onClick={()=>setModal('inventory')} className="px-4 py-2 bg-slate-800 rounded-xl text-xs font-bold hover:bg-slate-700 flex gap-2"><Icon name="Box" size={16}/> Inventario</button><button onClick={()=>setActiveModal('admin')} className="p-2 hover:bg-slate-800 rounded-full"><Icon name="Settings" size={20}/></button></>}
+                            <button onClick={()=>setModal('sales')} className="px-4 py-2 bg-indigo-600 rounded-xl text-xs font-bold hover:bg-indigo-700 flex gap-2 shadow-lg"><Icon name="ShoppingBag" size={16}/> Mostrador</button>
+                            <button onClick={()=>{playSound('click');setView('login')}} className="ml-4 text-slate-500 hover:text-rose-500"><Icon name="LogOut"/></button>
+                        </div>
+                    </nav>
+                    <main className="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        {equipos.map(eq => {
+                            let ms = eq.tiempoAcumulado||0; if(eq.estado==='ocupado') ms+=(Date.now()-eq.inicio);
+                            const renta = calculateRentAmount({ ...eq, tiempoAcumulado: ms }, config);
+                            const consumo = eq.cuenta.reduce((a,b)=>a+(b.precio*b.cantidad),0);
+                            
+                            const isPrepago = eq.modo === 'prepago';
+                            const totalMostrar = isPrepago ? ((eq.limite || 0) / 3600000) * eq.precioHora : (renta + consumo);
+                            const labelTotal = isPrepago ? 'COBRADO' : 'TOTAL';
+                            const colorTotal = isPrepago ? 'text-emerald-400' : 'text-slate-800';
+
+                            // Calculo de tiempo restante para prepago
+                            let tiempoRestanteDisplay = '--:--:--';
+                            if (isPrepago) {
+                                const totalElapsed = ms; // ms ya incluye el acumulado
+                                const remaining = Math.max(0, (eq.limite || 0) - totalElapsed);
+                                tiempoRestanteDisplay = new Date(remaining).toISOString().slice(11,19);
+                            } else {
+                                tiempoRestanteDisplay = new Date(ms).toISOString().slice(11,19);
+                            }
+
+                            return (
+                                <div key={eq.id} className={`rounded-3xl p-4 shadow-sm border-2 flex flex-col relative overflow-hidden ${isPrepago ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-transparent text-slate-800'} ${eq.estado==='ocupado' && !isPrepago ?'border-indigo-500 ring-4 ring-indigo-500/10':''}`}>
+                                    <div className="flex justify-between items-center mb-4 relative z-10"><div className={`flex items-center gap-2 font-black text-sm uppercase ${isPrepago?'text-white':'text-slate-800'}`}><Icon name={eq.tipo==='PC'?'Monitor':'Gamepad2'} size={18}/> {eq.nombre}</div><div className={`w-2 h-2 rounded-full ${eq.estado==='libre'?'bg-emerald-400':eq.estado==='ocupado'?'bg-rose-500 animate-pulse':'bg-amber-400'}`}></div></div>
+                                    <div className="flex-1 flex flex-col items-center justify-center py-4 relative z-10">
+                                        <div className={`text-4xl font-black font-mono tracking-tighter mb-1 ${isPrepago?'text-white':'text-slate-800'}`}>{tiempoRestanteDisplay}</div>
+                                        <div className="text-[10px] font-bold opacity-50 uppercase tracking-widest mb-6">Tiempo</div>
+                                        <div className={`w-full rounded-2xl p-3 flex justify-between items-center mb-4 border ${isPrepago?'bg-slate-800 border-slate-700':'bg-slate-50 border-slate-100'}`}><span className={`text-[10px] font-bold uppercase ${isPrepago?'text-slate-400':'text-slate-400'}`}>{labelTotal}</span><span className={`text-xl font-black ${colorTotal}`}>${totalMostrar.toFixed(2)}</span></div>
+                                        <div className="grid grid-cols-2 gap-2 w-full">
+                                            {eq.estado==='libre' ? 
+                                            <>
+                                                <button onClick={()=>iniciar(eq.id)} className="col-span-1 bg-indigo-600 text-white py-3 rounded-xl font-bold text-xs hover:bg-indigo-700 btn-press uppercase">LIBRE</button>
+                                                <button onClick={()=>{playSound('click'); setTargetId(eq.id); setModal('prepago'); setMinCustom(''); setDineroPrepago('');}} className="col-span-1 bg-slate-800 text-white py-3 rounded-xl font-bold text-xs hover:bg-black btn-press uppercase">PREPAGO</button>
+                                            </>
+                                            : 
+                                            <>
+                                                <button onClick={()=>pausar(eq.id)} className={`py-3 rounded-xl font-bold text-xs btn-press ${isPrepago?'bg-slate-700 text-white hover:bg-slate-600':'bg-amber-100 text-amber-700 hover:bg-amber-200'}`}>{eq.estado==='ocupado'?'PAUSA':'REANUDAR'}</button>
+                                                
+                                                {/* Botón Dinámico para Prepago */}
+                                                {isPrepago ? (
+                                                     eq.cuenta.length > 0 ? 
+                                                     <button onClick={()=>procesarCobro(eq.id)} className="py-3 bg-emerald-600 text-white rounded-xl font-bold text-xs hover:bg-emerald-700 btn-press">LIQUIDAR EXTRAS</button>
+                                                     :
+                                                     <button onClick={()=>prepararReinicio(eq.id)} className="py-3 bg-rose-600 text-white rounded-xl font-bold text-xs hover:bg-rose-700 btn-press">FINALIZAR</button>
+                                                ) : (
+                                                     <button onClick={()=>procesarCobro(eq.id)} className="py-3 bg-emerald-600 text-white rounded-xl font-bold text-xs hover:bg-emerald-700 btn-press">COBRAR</button>
+                                                )}
+
+                                                <button onClick={()=>{setTargetId(eq.id); setModal('consumption')}} className={`col-span-1 py-2 rounded-xl font-bold text-[10px] uppercase ${isPrepago?'bg-slate-700 text-white hover:bg-slate-600':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Consumo</button>
+                                                <button onClick={()=>{setTargetId(eq.id); setModal('move')}} className={`col-span-1 py-2 rounded-xl font-bold text-[10px] uppercase ${isPrepago?'bg-slate-700 text-white hover:bg-slate-600':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Mover</button>
+                                            </>}
+                                        </div>
+                                    </div>
+                                    {eq.estado!=='libre' && <button onClick={()=>prepararReinicio(eq.id)} className="mt-2 text-[10px] opacity-40 font-bold hover:opacity-100 self-center uppercase relative z-10">REINICIAR</button>}
+                                </div>
+                            )
+                        })}
+                    </main>
+                    {activeModal === 'inventory' && <InventoryModule onClose={()=>setActiveModal(null)} catalogo={catalogo} setCatalogo={setCatalogo} notify={notify} />}
+                    {activeModal === 'sales' && <SalesModule onClose={()=>setActiveModal(null)} catalogo={catalogo} onCobrar={({id, cuenta, clienteId}) => { setTargetId(id); setCarritoDirecto(cuenta); setActiveModal('checkout'); }} servicios={servicios} clientes={clientes} setClientes={setClientes} />}
+                    {activeModal === 'admin' && <AdminModule onClose={()=>setActiveModal(null)} config={config} setConfig={setConfig} equipos={equipos} setEquipos={setEquipos} usuarios={usuarios} setUsuarios={setUsuarios} clientes={clientes} setClientes={setClientes} servicios={servicios} setServicios={setServicios} onExport={exportarDatos} onImport={restaurarDatos} />}
+                    {activeModal === 'consumption' && targetId && <ConsumptionModule onClose={()=>setActiveModal(null)} terminal={equipos.find(e=>e.id===targetId)} catalogo={catalogo} setEquipos={setEquipos} printSettings={printSettings} notify={notify} servicios={servicios} clientes={clientes} setClientes={setClientes} />}
+                    {activeModal === 'move' && targetId && <Modal onClose={()=>setActiveModal(null)}><div className="bg-white rounded-3xl w-full max-w-sm p-6 text-center shadow-xl"><h3 className="font-black text-xl mb-4">Mover Sesión</h3><div className="grid grid-cols-2 gap-3 mb-6">{equipos.filter(e=>e.estado==='libre').map(e=><button key={e.id} onClick={()=>mover(targetId, e.id)} className="p-4 bg-slate-50 border rounded-xl font-bold text-xs hover:bg-indigo-600 hover:text-white uppercase">{e.nombre}</button>)}</div><button onClick={()=>setActiveModal(null)} className="text-slate-400 font-bold text-xs uppercase">Cancelar</button></div></Modal>}
+                    
+                    {activeModal === 'reset_confirm' && resetInfo && (
+                        <Modal onClose={()=>setActiveModal(null)}>
+                            <div className="bg-white rounded-3xl w-full max-w-sm p-8 shadow-2xl relative text-center">
+                                <h2 className="text-xl font-black mb-2">{resetInfo.advertencia ? "¡Deuda Pendiente!" : "Reiniciar Terminal"}</h2>
+                                <p className="text-sm text-slate-500 mb-6">¿Estás seguro de reiniciar <b>{resetInfo.nombre}</b>? {resetInfo.advertencia && `Hay un saldo de $${resetInfo.deuda} pendiente.`}</p>
+                                <div className="flex gap-4">
+                                    <button onClick={()=>setActiveModal(null)} className="flex-1 py-3 font-bold text-slate-400 hover:bg-slate-100 rounded-xl">Cancelar</button>
+                                    <button onClick={ejecutarReinicio} className={`flex-1 text-white py-3 rounded-xl font-black shadow-lg uppercase tracking-widest ${resetInfo.advertencia ? 'bg-rose-600' : 'bg-indigo-600'}`}>Limpiar</button>
+                                </div>
+                            </div>
+                        </Modal>
+                    )}
+
+                    {activeModal === 'checkout' && (
+                        <Modal onClose={()=>setActiveModal(null)}>
+                            <div className="bg-white rounded-3xl w-full max-w-md p-8 shadow-2xl relative">
+                                <button onClick={()=>setActiveModal(null)} className="absolute top-4 right-4 p-2 bg-slate-100 rounded-full"><Icon name="X"/></button>
+                                <h2 className="text-2xl font-black text-center mb-6">Checkout</h2>
+                                {(() => {
+                                    const eq = targetId === 'MOSTRADOR' ? { id: 'MOSTRADOR', cuenta: carritoDirecto } : equipos.find(e => e.id === targetId);
+                                    let renta = 0;
+                                    if(targetId !== 'MOSTRADOR') {
+                                        // Si es prepago, no se cobra renta en el checkout (ya se pagó)
+                                        if (eq.modo === 'prepago') {
+                                            renta = 0;
+                                        } else {
+                                            renta = calculateRentAmount({ ...eq, tiempoAcumulado: (eq.tiempoAcumulado||0), estado: eq.estado }, config);
+                                        }
+                                    }
+                                    const totalProd = eq.cuenta.reduce((a,b)=>a+(b.precio*b.cantidad),0);
+                                    let total = Math.round(renta + totalProd);
+                                    
+                                    const cId = targetId === 'MOSTRADOR' ? (eq.clienteId || 1) : eq.clienteId; 
+                                    const cliente = clientes.find(c => c.id === parseInt(cId)) || clientes[0];
+                                    const canRedeem = cliente.id !== 1 && cliente.puntos >= POINTS_REDEEM_THRESHOLD;
+
+                                    if(applyDiscount) total = Math.round(total * 0.90);
+
+                                    const pago = parseFloat(pagoCheckout) || 0;
+                                    return (
+                                        <div className="space-y-6">
+                                            <div className="bg-slate-800 p-6 rounded-2xl text-center text-white relative">
+                                                <p className="text-xs uppercase mb-2">Total a Pagar</p>
+                                                <h3 className="text-5xl font-black">${total.toFixed(2)}</h3>
+                                                {canRedeem && <button onClick={() => setApplyDiscount(!applyDiscount)} className={`mt-4 text-[10px] font-bold px-3 py-1 rounded border ${applyDiscount ? 'bg-emerald-500 text-white border-emerald-500' : 'text-slate-400 border-slate-500'}`}>{applyDiscount ? 'Descuento 10% Aplicado' : 'Canjear 5000 pts (10% Desc.)'}</button>}
+                                            </div>
+                                            <div><label className="text-xs font-bold uppercase">Efectivo</label><input autoFocus type="number" className="w-full border-2 p-3 rounded-xl text-2xl font-bold" value={pagoCheckout} onChange={e=>setPagoCheckout(e.target.value)}/></div>
+                                            <div className="flex justify-between px-2"><span className="font-bold text-slate-400">Cambio</span><span className={`text-2xl font-black ${pago>=total?'text-emerald-500':'text-slate-300'}`}>${Math.max(0, pago-total).toFixed(2)}</span></div>
+                                            <button onClick={confirmarCobro} disabled={pago<total} className="w-full bg-emerald-500 text-white py-4 rounded-xl font-black shadow-lg hover:bg-emerald-600 disabled:opacity-50">CONFIRMAR COBRO</button>
+                                        </div>
+                                    )
+                                })()}
+                            </div>
+                        </Modal>
+                    )}
+
+                    {activeModal === 'abrir_caja' && (
+                        <Modal onClose={()=>setActiveModal(null)}>
+                            <div className="bg-white rounded-3xl w-full max-w-md p-8 text-slate-800 shadow-2xl">
+                                <h3 className="text-2xl font-black mb-4">Apertura de Turno</h3>
+                                <input type="number" value={fondoInput} onChange={e=>setFondoInput(e.target.value)} className="w-full border-2 border-slate-200 p-5 rounded-2xl text-4xl font-black mb-6 outline-none focus:border-indigo-500 transition-all bg-slate-50 shadow-inner" placeholder="0.00" autoFocus />
+                                <div className="flex gap-4">
+                                    <button onClick={()=>setActiveModal(null)} className="flex-1 py-4 font-bold text-slate-400 rounded-2xl hover:bg-slate-100 transition-colors">Cancelar</button>
+                                    <button onClick={()=>abrirCaja(fondoInput)} className="flex-1 bg-indigo-600 text-white py-4 rounded-2xl font-black shadow-lg">ABRIR</button>
+                                </div>
+                            </div>
+                        </Modal>
+                    )}
+
+                    {activeModal === 'caja' && (
+                        <Modal onClose={()=>setActiveModal(null)}>
+                            <div className="bg-white rounded-3xl w-full max-w-md p-8 text-center shadow-2xl">
+                                <Icon name="Wallet" size={48} className="text-emerald-600 mx-auto mb-4"/>
+                                <h3 className="text-2xl font-black mb-6 tracking-tight tracking-widest">Caja Activa</h3>
+                                <div className="space-y-4 mb-8 bg-slate-50 p-6 rounded-3xl border border-slate-100 shadow-inner">
+                                    <div className="flex justify-between font-bold text-sm"><span className="text-slate-400 uppercase tracking-widest">Fondo</span><span>${caja.fondo.toFixed(2)}</span></div>
+                                    <div className="flex justify-between font-bold text-sm"><span className="text-slate-400 uppercase tracking-widest">Ventas</span><span className="text-emerald-600 font-black">+ ${ventas.filter(v => new Date(v.fecha) > new Date(caja.inicio)).reduce((a,b)=>a+b.total,0).toFixed(2)}</span></div>
+                                    <div className="pt-4 border-t flex justify-between items-center font-black"><span className="text-slate-800 uppercase text-xs">Total</span><span className="text-3xl font-black text-indigo-600 tracking-tighter">${(caja.fondo + ventas.filter(v => new Date(v.fecha) > new Date(caja.inicio)).reduce((a,b)=>a+b.total,0)).toFixed(2)}</span></div>
+                                </div>
+                                <div className="flex gap-4">
+                                    <button onClick={()=>setActiveModal(null)} className="flex-1 py-4 font-bold text-slate-400 rounded-2xl hover:bg-slate-100 transition-colors">Volver</button>
+                                    <button onClick={cerrarTurno} className="flex-1 bg-rose-600 text-white rounded-xl font-black shadow-lg hover:bg-rose-700 transition-all uppercase text-xs tracking-widest">Cerrar Turno</button>
+                                </div>
+                            </div>
+                        </Modal>
+                    )}
+
+                    {activeModal === 'prepago' && targetId && (
+                        <Modal onClose={()=>setActiveModal(null)}>
+                            <div className="bg-white rounded-[2.5rem] w-full max-w-sm p-8 shadow-2xl text-center text-slate-800">
+                                <div className="mx-auto w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4 text-slate-600 shadow-inner"><Icon name="Timer" size={32}/></div>
+                                <h3 className="text-2xl font-black mb-2 tracking-tight">Tiempo Prepago</h3>
+                                <p className="text-xs font-bold text-slate-400 uppercase mb-8 tracking-widest">Terminal: {equipos.find(e=>e.id===targetId)?.nombre}</p>
+                                <div className="grid grid-cols-3 gap-3 mb-6">
+                                    {[15,30,60,90,120,180].map(m => (
+                                        <button key={m} onClick={() => iniciarEquipo(targetId, 'prepago', m)} className="bg-slate-50 border border-slate-100 hover:bg-indigo-600 hover:text-white py-4 rounded-2xl font-black text-sm transition-all shadow-sm active:scale-95">{m} min</button>
+                                    ))}
+                                </div>
+                                <div className="mb-6 pt-6 border-t border-slate-100 text-left">
+                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Por Cantidad ($)</label>
+                                    <div className="flex gap-2">
+                                        <div className="relative flex-1">
+                                            <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-slate-400">$</span>
+                                            <input type="number" value={dineroPrepago} onChange={e=>setDineroPrepago(e.target.value)} className="w-full border-2 border-slate-100 p-4 pl-8 rounded-2xl font-black outline-none focus:border-emerald-400 bg-slate-50 shadow-inner text-emerald-600" placeholder="0.00" />
+                                        </div>
+                                        <button onClick={() => iniciarEquipoPorDinero(targetId, dineroPrepago)} className="bg-emerald-600 text-white px-6 rounded-2xl font-black shadow-lg shadow-emerald-100 hover:bg-emerald-700 active:scale-95 transition-all"><Icon name="Check" size={20}/></button>
+                                    </div>
+                                    {dineroPrepago && <p className="text-[10px] font-bold text-emerald-500 mt-2 text-right">≈ {((parseFloat(dineroPrepago) / equipos.find(e=>e.id===targetId).precioHora) * 60).toFixed(0)} minutos</p>}
+                                </div>
+                                <div className="pt-2 border-t border-slate-100 text-left">
+                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Manual (Min)</label>
+                                    <div className="flex gap-2">
+                                        <input type="number" value={minCustom} onChange={e=>setMinCustom(e.target.value)} className="flex-1 border-2 border-slate-100 p-4 rounded-2xl font-black outline-none focus:border-indigo-400 bg-slate-50 shadow-inner" placeholder="0" />
+                                        <button onClick={() => iniciarEquipo(targetId, 'prepago', minCustom)} className="bg-indigo-600 text-white px-8 rounded-2xl font-black shadow-lg shadow-indigo-100 hover:bg-indigo-700 active:scale-95 transition-all">OK</button>
+                                    </div>
+                                </div>
+                                <button onClick={() => setActiveModal(null)} className="mt-8 text-slate-300 hover:text-slate-500 font-bold text-xs transition-colors tracking-widest uppercase">Cancelar</button>
+                            </div>
+                        </Modal>
+                    )}
+
+                    {/* BOTÓN FLOTANTE DE CAJA (Nuevo) */}
+                    <button 
+                        onClick={() => setModal(caja.activa ? 'caja' : 'abrir_caja')}
+                        className="fixed bottom-6 right-6 p-4 bg-slate-900/40 hover:bg-slate-900/80 backdrop-blur-md text-white rounded-full shadow-2xl transition-all hover:scale-110 z-30 group"
+                    >
+                        <Icon name="Wallet" size={24} className="opacity-80 group-hover:opacity-100"/>
+                    </button>
+
+                    {notif && <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 px-6 py-3 rounded-2xl shadow-xl z-50 text-white text-xs font-black uppercase tracking-widest msg-anim flex gap-2 items-center ${notif.type==='error'?'bg-rose-500':'bg-slate-900'}`}><Icon name={notif.type==='error'?'AlertCircle':'CheckCircle'} size={16}/> {notif.msg}</div>}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
