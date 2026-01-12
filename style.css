@@ -1,0 +1,74 @@
+/* Fuentes importadas */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap');
+
+/* Estilos Base */
+body { 
+    font-family: 'Inter', sans-serif; 
+    -webkit-user-select: none;
+    user-select: none; 
+    overflow-x: hidden; 
+    -webkit-tap-highlight-color: transparent;
+}
+
+.font-mono { 
+    font-family: 'JetBrains+Mono', monospace; 
+}
+
+/* Scrollbar Personalizado */
+.custom-scrollbar::-webkit-scrollbar { 
+    width: 6px; 
+    height: 6px; 
+}
+.custom-scrollbar::-webkit-scrollbar-track { 
+    background: #f1f1f1; 
+}
+.custom-scrollbar::-webkit-scrollbar-thumb { 
+    background: #cbd5e1; 
+    border-radius: 3px; 
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { 
+    background: #94a3b8; 
+}
+
+/* Animaciones */
+.modal-anim { 
+    animation: zoomIn 0.2s ease-out forwards; 
+}
+
+.msg-anim { 
+    animation: slideInUp 0.3s ease-out forwards; 
+}
+
+@keyframes slideInUp { 
+    from { transform: translateY(20px); opacity: 0; } 
+    to { transform: translateY(0); opacity: 1; } 
+}
+
+@keyframes zoomIn { 
+    from { transform: scale(0.95); opacity: 0; } 
+    to { transform: scale(1); opacity: 1; } 
+}
+
+/* Alertas visuales */
+@keyframes alarmFlash { 
+    0%, 100% { background-color: #ffffff; } 
+    50% { background-color: #fee2e2; border-color: #ef4444; } 
+}
+
+.alarm-active { 
+    animation: alarmFlash 1s infinite; 
+}
+
+/* Efectos de botón */
+.btn-press { 
+    transition: transform 0.1s; 
+}
+.btn-press:active { 
+    transform: scale(0.95); 
+}
+
+/* Barra de progreso rayada */
+.progress-bar-stripe { 
+    background-image: linear-gradient(45deg,rgba(255,255,255,.15) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.15) 50%,rgba(255,255,255,.15) 75%,transparent 75%,transparent); 
+    background-size: 1rem 1rem; 
+}
