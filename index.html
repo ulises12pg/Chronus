@@ -42,7 +42,8 @@
             CONFIG: {
                 EMPRESA: "CIBER CENTRO PROGRESO", RFC: "XAXX010101000", REGIMEN: "626 - Simplificado de Confianza", 
                 LUGAR_EXPEDICION: "Progreso, Hidalgo", SISTEMA_VERSION: "Chronus 19.1", COLOR_CORP: "bg-slate-900",
-                TICKET_FORMAT: "TICKET", MIN_CHARGE_TIME: 3, MIN_CHARGE_AMOUNT: 5.00, IVA_RATE: 0.16
+                TICKET_FORMAT: "TICKET", MIN_CHARGE_TIME: 3, MIN_CHARGE_AMOUNT: 5.00, IVA_RATE: 0.16,
+                TICKET_HEADERS: { CANT: 'Cant.', DESC: 'Des.', PU: 'PU.', IMP: 'Imp.' }
             },
             PRINT: {
                 prices: { BN: { CARTA: 2, OFICIO: 3, TABLOIDE: 10 }, COLOR: { CARTA: 5, OFICIO: 8, TABLOIDE: 15 } },
@@ -373,6 +374,16 @@
                                     <div><label className="text-xs font-bold text-slate-400">Régimen Fiscal</label><input className="w-full border-2 p-3 rounded-xl font-bold outline-none" value={config.REGIMEN} onChange={e=>setConfig({...config, REGIMEN:e.target.value})}/></div>
                                     <div><label className="text-xs font-bold text-slate-400">Lugar Expedición</label><input className="w-full border-2 p-3 rounded-xl font-bold outline-none" value={config.LUGAR_EXPEDICION} onChange={e=>setConfig({...config, LUGAR_EXPEDICION:e.target.value})}/></div>
                                     <div className="flex gap-4"><div><label className="text-[10px] font-bold text-slate-400 uppercase">Mínimo ($)</label><input type="number" className="w-full border-2 p-3 rounded-xl font-bold outline-none" value={config.MIN_CHARGE_AMOUNT} onChange={e=>setConfig({...config, MIN_CHARGE_AMOUNT:parseFloat(e.target.value)})}/></div></div>
+                                    
+                                    <div className="pt-4 border-t mt-2">
+                                        <h3 className="font-bold text-sm mb-3 text-slate-700">Encabezados Ticket</h3>
+                                        <div className="grid grid-cols-4 gap-2">
+                                            <div><label className="text-[10px] font-bold text-slate-400">Cant</label><input className="w-full border p-2 rounded-lg text-xs font-bold outline-none focus:border-indigo-500" value={config.TICKET_HEADERS?.CANT || ''} onChange={e=>setConfig({...config, TICKET_HEADERS: {...config.TICKET_HEADERS, CANT: e.target.value}})}/></div>
+                                            <div><label className="text-[10px] font-bold text-slate-400">Desc</label><input className="w-full border p-2 rounded-lg text-xs font-bold outline-none focus:border-indigo-500" value={config.TICKET_HEADERS?.DESC || ''} onChange={e=>setConfig({...config, TICKET_HEADERS: {...config.TICKET_HEADERS, DESC: e.target.value}})}/></div>
+                                            <div><label className="text-[10px] font-bold text-slate-400">P.U.</label><input className="w-full border p-2 rounded-lg text-xs font-bold outline-none focus:border-indigo-500" value={config.TICKET_HEADERS?.PU || ''} onChange={e=>setConfig({...config, TICKET_HEADERS: {...config.TICKET_HEADERS, PU: e.target.value}})}/></div>
+                                            <div><label className="text-[10px] font-bold text-slate-400">Imp</label><input className="w-full border p-2 rounded-lg text-xs font-bold outline-none focus:border-indigo-500" value={config.TICKET_HEADERS?.IMP || ''} onChange={e=>setConfig({...config, TICKET_HEADERS: {...config.TICKET_HEADERS, IMP: e.target.value}})}/></div>
+                                        </div>
+                                    </div>
                                 </div>
                             )}
                             {tab === 'servicios' && (<div className="flex gap-6"><div className="w-1/3 bg-slate-50 p-4 rounded-2xl border"><h4 className="font-black mb-4">{svcForm.id ? 'Editar' : 'Nuevo'} Servicio</h4><input className="w-full p-2 mb-2 rounded border" placeholder="Nombre" value={svcForm.nombre} onChange={e=>setSvcForm({...svcForm, nombre:e.target.value})}/><input className="w-full p-2 mb-2 rounded border" type="number" placeholder="Precio" value={svcForm.precio} onChange={e=>setSvcForm({...svcForm, precio:e.target.value})}/><div className="grid grid-cols-5 gap-2 mb-4 h-32 overflow-y-auto bg-white p-2 rounded border">{ICONS.map(ic => <button key={ic} onClick={()=>setSvcForm({...svcForm, icon:ic})} className={`p-1 rounded ${svcForm.icon===ic?'bg-indigo-100 text-indigo-600':''}`}><Icon name={ic} size={16}/></button>)}</div><div className="flex gap-2">{svcForm.id && <button onClick={()=>{setServicios(prev=>prev.filter(s=>s.id!==svcForm.id)); setSvcForm({ id: null, nombre: '', precio: '', icon: 'Star' })}} className="p-2 bg-rose-100 text-rose-600 rounded-lg"><Icon name="Trash2"/></button>}<button onClick={guardarServicio} className="flex-1 bg-indigo-600 text-white rounded-lg font-bold py-2">Guardar</button></div></div><div className="flex-1 grid grid-cols-2 gap-3 content-start">{servicios.map(s => (<div key={s.id} onClick={()=>setSvcForm(s)} className="p-4 border rounded-xl flex items-center gap-4 cursor-pointer hover:bg-slate-50"><div className="p-2 bg-indigo-50 rounded-lg text-indigo-600"><Icon name={s.icon}/></div><div><div className="font-bold">{s.nombre}</div><div className="text-xs text-slate-500">${s.precio}</div></div></div>))}</div></div>)}
@@ -451,7 +462,10 @@
             const [view, setView] = useState('login');
             const [user, setUser] = useState(null);
             
-            const [config, setConfig] = useState(() => JSON.parse(localStorage.getItem('pos_config')) || DEFAULTS.CONFIG);
+            const [config, setConfig] = useState(() => {
+                const saved = JSON.parse(localStorage.getItem('pos_config'));
+                return saved ? { ...DEFAULTS.CONFIG, ...saved, TICKET_HEADERS: { ...DEFAULTS.CONFIG.TICKET_HEADERS, ...(saved.TICKET_HEADERS || {}) } } : DEFAULTS.CONFIG;
+            });
             const [printSettings, setPrintSettings] = useState(() => JSON.parse(localStorage.getItem('pos_print_settings')) || DEFAULTS.PRINT);
             const [equipos, setEquipos] = useState(() => JSON.parse(localStorage.getItem('pos_equipos')) || [{id:1, nombre:'PC-01', precioHora:15, estado:'libre', cuenta:[], tipo:'PC'}]);
             const [catalogo, setCatalogo] = useState(() => JSON.parse(localStorage.getItem('pos_catalogo')) || [{id:1, nombre:'Coca Cola', precio:18, icon:'Coffee', codigo:'75001'}]);
@@ -722,21 +736,27 @@
                         doc.text(`Cte: ${nombreCliente.slice(0,20)}`, 2, y); y+=6;
                         
                         // Encabezados Ticket
+                        const h = config.TICKET_HEADERS || { CANT: 'Cant.', DESC: 'Des.', PU: 'PU.', IMP: 'Imp.' };
                         doc.setFont(undefined, 'bold');
-                        doc.text('Cant. Des.           PU.   Imp.', 2, y); 
+                        doc.text(h.CANT, 2, y); 
+                        doc.text(h.DESC, 10, y);
+                        doc.text(h.PU, 40, y, {align:'right'});
+                        doc.text(h.IMP, 56, y, {align:'right'});
                         doc.setFont(undefined, 'normal');
                         y+=4;
 
                         if (data.renta > 0) { 
-                            doc.text(`1     RENTA EQUIPO`, 2, y); 
-                            doc.text(`${data.renta.toFixed(2)}`, 42, y, {align:'right'});
+                            doc.text('1', 2, y);
+                            doc.text('RENTA EQUIPO', 10, y);
+                            doc.text(`${data.renta.toFixed(2)}`, 40, y, {align:'right'});
                             doc.text(`${data.renta.toFixed(2)}`, 56, y, {align:'right'}); 
                             y+=4; 
                         }
                         data.items.forEach(i => {
-                            const name = i.nombre.slice(0,12);
-                            doc.text(`${i.cantidad}     ${name}`, 2, y);
-                            doc.text(`${i.precio.toFixed(2)}`, 42, y, {align:'right'});
+                            const name = i.nombre.slice(0,14);
+                            doc.text(i.cantidad.toString(), 2, y);
+                            doc.text(name, 10, y);
+                            doc.text(`${i.precio.toFixed(2)}`, 40, y, {align:'right'});
                             doc.text(`${(i.precio*i.cantidad).toFixed(2)}`, 56, y, {align:'right'});
                             y+=4;
                         });
