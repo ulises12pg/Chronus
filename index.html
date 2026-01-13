@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chronus 17.6 - Price Edit Fix</title>
+    <title>Chronus 19.1 - Enterprise PDF & Loyalty</title>
     
     <!-- Librerías -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -17,7 +17,7 @@
 
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap');
-        body { font-family: 'Inter', sans-serif; -webkit-user-select: none; user-select: none; overflow-x: hidden; }
+        body { font-family: 'Inter', sans-serif; user-select: none; overflow-x: hidden; }
         .font-mono { font-family: 'JetBrains+Mono', monospace; }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
@@ -40,9 +40,9 @@
         
         const DEFAULTS = {
             CONFIG: {
-                EMPRESA: "CIBER CENTRO PROGRESO", RFC: "XAXX010101000", REGIMEN: "Simplificado", 
-                LUGAR_EXPEDICION: "Hidalgo", SISTEMA_VERSION: "Chronus 17.6", COLOR_CORP: "bg-slate-900",
-                TICKET_FORMAT: "TICKET", MIN_CHARGE_TIME: 3, MIN_CHARGE_AMOUNT: 5.00
+                EMPRESA: "CIBER CENTRO PROGRESO", RFC: "XAXX010101000", REGIMEN: "626 - Simplificado de Confianza", 
+                LUGAR_EXPEDICION: "Progreso, Hidalgo", SISTEMA_VERSION: "Chronus 19.1", COLOR_CORP: "bg-slate-900",
+                TICKET_FORMAT: "TICKET", MIN_CHARGE_TIME: 3, MIN_CHARGE_AMOUNT: 5.00, IVA_RATE: 0.16
             },
             PRINT: {
                 prices: { BN: { CARTA: 2, OFICIO: 3, TABLOIDE: 10 }, COLOR: { CARTA: 5, OFICIO: 8, TABLOIDE: 15 } },
@@ -59,22 +59,37 @@
 
         const calculateRentAmount = (eq, config) => {
             if (!eq || eq.estado === 'libre') return 0;
+            if (eq.modo === 'prepago') {
+                 const hours = (eq.limite || 0) / 3600000;
+                 return hours * eq.precioHora; 
+            }
             let ms = eq.tiempoAcumulado || 0;
             if (eq.estado === 'ocupado' && eq.inicio) ms += (Date.now() - eq.inicio);
-            
             const hours = ms / 3600000;
-            let total = hours * (parseFloat(eq.precioHora) || 0); // Asegurar numérico
-            
-            if ((ms / 60000) > config.MIN_CHARGE_TIME && total < config.MIN_CHARGE_AMOUNT) {
-                total = config.MIN_CHARGE_AMOUNT;
-            }
+            let total = hours * eq.precioHora;
+            if ((ms / 60000) > config.MIN_CHARGE_TIME && total < config.MIN_CHARGE_AMOUNT) total = config.MIN_CHARGE_AMOUNT;
             return total;
         };
 
         const numeroALetras = (amount) => {
-            const entero = Math.floor(amount);
-            const centavos = Math.round((amount - entero) * 100);
-            return `${entero} PESOS ${centavos.toString().padStart(2, '0')}/100 M.N.`; 
+            const unidades = ['','UNO','DOS','TRES','CUATRO','CINCO','SEIS','SIETE','OCHO','NUEVE'];
+            const decenas = ['','DIEZ','VEINTE','TREINTA','CUARENTA','CINCUENTA','SESENTA','SETENTA','OCHENTA','NOVENTA'];
+            const diez = ['DIEZ','ONCE','DOCE','TRECE','CATORCE','QUINCE','DIECISEIS','DIECISIETE','DIECIOCHO','DIECINUEVE'];
+            const centenas = ['','CIENTO','DOSCIENTOS','TRESCIENTOS','CUATROCIENTOS','QUINIENTOS','SEISCIENTOS','SETECIENTOS','OCHOCIENTOS','NOVECIENTOS'];
+            
+            let n = Math.floor(amount);
+            const centavos = Math.round((amount - n) * 100);
+            let letras = "";
+
+            if (n === 0) letras = "CERO";
+            else if (n === 100) letras = "CIEN";
+            else {
+                if (n >= 100) { letras += centenas[Math.floor(n / 100)] + " "; n %= 100; }
+                if (n >= 20) { letras += decenas[Math.floor(n / 10)] + (n % 10 !== 0 ? " Y " : ""); n %= 10; }
+                else if (n >= 10) { letras += diez[n - 10]; n = 0; }
+                if (n > 0) letras += unidades[n];
+            }
+            return `${letras.trim()} PESOS ${centavos.toString().padStart(2, '0')}/100 M.N.`; 
         };
 
         // --- 3. MOTOR DE AUDIO ---
@@ -103,10 +118,6 @@
                 osc.type = 'sawtooth'; osc.frequency.setValueAtTime(150, now); 
                 gain.gain.setValueAtTime(0.1, now); gain.gain.linearRampToValueAtTime(0, now + 0.3);
                 osc.start(now); osc.stop(now + 0.3);
-            } else if (type === 'open') {
-                osc.type = 'sine'; osc.frequency.setValueAtTime(300, now); osc.frequency.linearRampToValueAtTime(500, now + 0.2);
-                gain.gain.setValueAtTime(0.05, now); gain.gain.linearRampToValueAtTime(0, now + 0.2);
-                osc.start(now); osc.stop(now + 0.2);
             }
         };
 
@@ -267,8 +278,7 @@
             );
         };
 
-        const SalesModule = ({ onClose, catalogo, onCobrar, servicios, clientes, setClientes }) => {
-            const [carrito, setCarrito] = useState([]);
+        const SalesModule = ({ onClose, catalogo, onCobrar, servicios, clientes, setClientes, carrito, setCarrito }) => {
             const [search, setSearch] = useState('');
             const [activeClient, setActiveClient] = useState(1);
             const [tab, setTab] = useState('catalogo');
@@ -459,8 +469,13 @@
             const [applyDiscount, setApplyDiscount] = useState(false);
             const [resetInfo, setResetInfo] = useState(null);
             const [fondoInput, setFondoInput] = useState('');
+            const [efectivoDeclarado, setEfectivoDeclarado] = useState('');
             const [dineroPrepago, setDineroPrepago] = useState('');
             const [minCustom, setMinCustom] = useState('');
+            const [checkoutClient, setCheckoutClient] = useState(1);
+            
+            // --- ESTADO PARA ACCIONES PENDIENTES ---
+            const [pendingAction, setPendingAction] = useState(null);
 
             useEffect(() => { localStorage.setItem('pos_config', JSON.stringify(config)); }, [config]);
             useEffect(() => { localStorage.setItem('pos_equipos', JSON.stringify(equipos)); }, [equipos]);
@@ -476,7 +491,55 @@
 
             const notify = (msg, type='info') => { setNotif({msg, type}); setTimeout(()=>setNotif(null), 3000); };
             const iniciar = (id) => { setEquipos(p => p.map(e => e.id===id ? {...e, estado:'ocupado', inicio:Date.now(), cuenta:[]} : e)); notify('Iniciado'); };
-            const iniciarEquipo = (id, modo, limite) => { playSound('success'); setEquipos(p => p.map(e => e.id===id ? {...e, estado:'ocupado', inicio:Date.now(), modo, limite: limite*60000, cuenta:[]} : e)); notify('Iniciado Prepago'); setActiveModal(null); };
+            
+            // --- MANEJO SEGURO DE PREPAGO ---
+            const handlePrepaidAttempt = (id, type, val) => {
+                if (!caja.activa) {
+                    setPendingAction({ type: 'PREPAGO', id, modeType: type, val });
+                    playSound('error');
+                    setModal('abrir_caja'); 
+                    return;
+                }
+                if (type === 'money') iniciarEquipoPorDinero(id, val);
+                else iniciarEquipo(id, 'prepago', val);
+            };
+
+            const iniciarEquipo = (id, modo, limite) => { 
+                const eq = equipos.find(e => e.id === id);
+                if (!eq) return;
+
+                const costo = (limite / 60) * eq.precioHora;
+                const totalFinal = Math.round(costo);
+                const folio = `UF-${new Date().getDate().toString().padStart(2,'0')}${(new Date().getMonth()+1).toString().padStart(2,'0')}${new Date().getFullYear().toString().slice(-2)}-${Math.floor(Math.random()*900)+100}`;
+                
+                const cliente = clientes[0]; // Publico General por defecto en prepago rápido
+
+                const ventaPrepago = {
+                    id: Date.now(),
+                    folio,
+                    fecha: new Date().toISOString(),
+                    total: totalFinal,
+                    items: [{ cantidad: 1, nombre: `Prepago ${Math.round(limite)}min`, precio: totalFinal }],
+                    subtotalRenta: totalFinal,
+                    cliente: cliente, // Objeto completo
+                    atendio: user.nombre,
+                    origen: eq.nombre,
+                    pagoCon: totalFinal,
+                    cambio: 0,
+                    puntosGanados: 0, 
+                    nuevosPuntos: 0,
+                    renta: totalFinal 
+                };
+                
+                setVentas(prev => [...prev, ventaPrepago]);
+                setEquipos(p => p.map(e => e.id===id ? {...e, estado:'ocupado', inicio:Date.now(), modo, limite: limite*60000, cuenta:[]} : e)); 
+                
+                notify(`Prepago iniciado: $${totalFinal}`); 
+                setActiveModal(null);
+                playSound('success'); 
+                generarPDFVenta(ventaPrepago);
+            };
+
             const iniciarEquipoPorDinero = (id, dinero) => {
                 const eq = equipos.find(e => e.id === id);
                 if (!eq) return;
@@ -491,24 +554,33 @@
             const prepararReinicio = (id) => {
                 const eq = equipos.find(e => e.id === id);
                 if(!eq) return;
-                const renta = calculateRentAmount({ ...eq, tiempoAcumulado: (eq.tiempoAcumulado || 0) + (eq.estado === 'ocupado' ? (Date.now() - eq.inicio) : 0), estado: eq.estado }, config);
+                
+                let renta = 0;
+                if(eq.modo !== 'prepago') {
+                    renta = calculateRentAmount({ ...eq, tiempoAcumulado: (eq.tiempoAcumulado || 0) + (eq.estado === 'ocupado' ? (Date.now() - eq.inicio) : 0), estado: eq.estado }, config);
+                }
+                
                 const consumo = eq.cuenta.reduce((a,b)=>a+(b.precio*b.cantidad),0);
                 const total = Math.round(renta + consumo);
-                setResetInfo({ id, nombre: eq.nombre, deuda: total, advertencia: total > 10 });
+                setResetInfo({ id, nombre: eq.nombre, deuda: total, advertencia: total > 0 });
                 setActiveModal('reset_confirm');
             };
 
             const ejecutarReinicio = () => {
+                 playSound('success');
                  setEquipos(p => p.map(e => e.id===resetInfo.id ? {...e, estado:'libre', inicio:null, tiempoAcumulado:0, cuenta:[], modo: 'libre', limite: 0} : e));
                  setActiveModal(null);
                  notify('Terminal Reiniciada');
             };
             
             const abrirCheckout = (id) => {
+                let initialClient = 1;
                 if(id !== 'MOSTRADOR') {
                     const eq = equipos.find(e => e.id === id);
+                    if (eq) initialClient = eq.clienteId || 1;
                     if(eq && eq.estado === 'ocupado') pausar(id);
                 }
+                setCheckoutClient(initialClient);
                 setTargetId(id); setPagoCheckout(''); setApplyDiscount(false); setActiveModal('checkout');
                 playSound('open');
             };
@@ -522,7 +594,6 @@
                  if (!eq) return;
                  let renta = 0;
                  if(targetId !== 'MOSTRADOR') {
-                     // Si es prepago, la renta ya se cobró, así que es 0 para el checkout final de "extras"
                      if (eq.modo === 'prepago') {
                          renta = 0; 
                      } else {
@@ -533,7 +604,6 @@
                  const totalRaw = renta + totalItems;
                  let total = Math.round(totalRaw);
                  
-                 // Aplicar descuento 10% si se seleccionó
                  if(applyDiscount) {
                      total = Math.round(totalRaw * 0.90);
                  }
@@ -543,29 +613,53 @@
                  if (pago < total) return notify('Monto insuficiente', 'error');
                  
                  const fecha = new Date().toISOString();
-                 const folio = `FOL-${Date.now()}`;
+                 const folio = `UF-${new Date().getDate().toString().padStart(2,'0')}${(new Date().getMonth()+1).toString().padStart(2,'0')}${new Date().getFullYear().toString().slice(-2)}-${Math.floor(Math.random()*900)+100}`;
                  
-                 // Actualizar Puntos
-                 const cId = targetId === 'MOSTRADOR' ? (eq.clienteId || 1) : eq.clienteId;
-                 const cliente = clientes.find(c => c.id === parseInt(cId)) || clientes[0];
+                 const cliente = clientes.find(c => c.id === parseInt(checkoutClient)) || clientes[0];
                  const puntosGanados = Math.floor(total * POINTS_PER_PESO);
                  let nuevosPuntos = (cliente.puntos || 0) + puntosGanados;
                  
                  if(applyDiscount && cliente.id !== 1) {
-                     nuevosPuntos -= POINTS_REDEEM_THRESHOLD; // Restar los 5000 pts si se usó el descuento
+                     nuevosPuntos -= POINTS_REDEEM_THRESHOLD;
                  }
 
                  if(cliente.id !== 1) {
                      setClientes(prev => prev.map(c => c.id === cliente.id ? { ...c, puntos: nuevosPuntos } : c));
                  }
 
-                 setVentas([...ventas, { id: Date.now(), total, items: eq.cuenta, fecha: new Date().toISOString(), folio, cliente: cliente.nombre, atendio: user.nombre }]);
+                 const datosVenta = { 
+                     id: Date.now(), 
+                     total, 
+                     items: eq.cuenta, 
+                     fecha: new Date().toISOString(), 
+                     folio, 
+                     cliente: cliente, 
+                     atendio: user.nombre, 
+                     renta, 
+                     pagoCon: pago, 
+                     cambio: pago - total,
+                     puntosGanados, 
+                     nuevosPuntos 
+                 };
+
+                 setVentas(prev => [...prev, datosVenta]); 
                  notify('Cobro registrado');
                  playSound('success');
                  
-                 // Generar PDF 
+                 generarPDFVenta(datosVenta);
+
+                 if(targetId==='MOSTRADOR') setCarritoDirecto([]);
+                 else setEquipos(p => p.map(e => e.id === targetId ? {...e, estado:'libre', inicio:null, tiempoAcumulado:0, cuenta:[], modo: 'libre', limite: 0} : e));
+                 setActiveModal(null);
+            };
+
+            const generarPDFVenta = (data) => {
                  try {
                      const { jsPDF } = window.jspdf;
+                     const nombreCliente = data.cliente ? data.cliente.nombre : (data.cliente || 'Público General');
+                     const puntosGanados = data.puntosGanados || 0;
+                     const nuevosPuntos = data.nuevosPuntos || 0;
+
                      if(config.TICKET_FORMAT === 'CARTA') {
                         const doc = new jsPDF({ format: 'letter' });
                         let y = 20;
@@ -574,38 +668,101 @@
                         doc.text(`RFC: ${config.RFC}`, 105, y, { align: 'center' }); y+=5;
                         doc.text(`REGIMEN: ${config.REGIMEN}`, 105, y, { align: 'center' }); y+=5;
                         doc.text(`LUGAR: ${config.LUGAR_EXPEDICION}`, 105, y, { align: 'center' }); y+=15;
-                        doc.text(`Folio: ${folio}`, 20, y); doc.text(`Fecha: ${new Date(fecha).toLocaleString()}`, 140, y); y+=10;
+                        doc.text(`Folio: ${data.folio}`, 20, y); doc.text(`Fecha: ${new Date(data.fecha).toLocaleString()}`, 140, y); y+=10;
+                        doc.text(`Cliente: ${nombreCliente}`, 20, y); y+=10;
+
                         const body = [];
-                        if(renta > 0) body.push(['1', 'RENTA EQUIPO', `$${renta.toFixed(2)}`, `$${renta.toFixed(2)}`]);
-                        eq.cuenta.forEach(i => body.push([i.cantidad, i.nombre, `$${i.precio.toFixed(2)}`, `$${(i.precio*i.cantidad).toFixed(2)}`]));
-                        doc.autoTable({ startY: y, head: [['CANT.', 'DESC.', 'P.U.', 'IMPORTE']], body });
-                        y = doc.lastAutoTable.finalY + 10;
-                        doc.text(`TOTAL: $${total.toFixed(2)}`, 160, y, {align:'right'});
-                        doc.save(`Venta_${folio}.pdf`);
+                        if(data.renta > 0) body.push(['1', 'RENTA EQUIPO', `$${data.renta.toFixed(2)}`, `$${data.renta.toFixed(2)}`]);
+                        data.items.forEach(i => body.push([i.cantidad, i.nombre, `$${i.precio.toFixed(2)}`, `$${(i.precio*i.cantidad).toFixed(2)}`]));
+                        
+                        // SAT 2026: Formato tabular detallado
+                        doc.autoTable({ 
+                            startY: y, 
+                            head: [['CANT.', 'DESCRIPCIÓN', 'P. UNITARIO', 'IMPORTE']], 
+                            body,
+                            theme: 'plain',
+                            styles: { fontSize: 9, cellPadding: 2 },
+                            headStyles: { fillColor: [240, 240, 240], textColor: 0, fontStyle: 'bold', lineWidth: 0.1, lineColor: 200 },
+                            bodyStyles: { lineWidth: 0.1, lineColor: 200 }
+                        });
+                        y = doc.lastAutoTable.finalY + 5;
+                        
+                        const subtotal = data.total / (1 + (config.IVA_RATE || 0.16));
+                        const iva = data.total - subtotal;
+                        
+                        doc.setFontSize(10);
+                        doc.text(`SUBTOTAL: $${subtotal.toFixed(2)}`, 190, y+5, {align:'right'});
+                        doc.text(`IVA ${(config.IVA_RATE*100).toFixed(0)}%: $${iva.toFixed(2)}`, 190, y+10, {align:'right'});
+                        doc.setFontSize(12); doc.setFont(undefined, 'bold');
+                        doc.text(`TOTAL: $${data.total.toFixed(2)}`, 190, y+18, {align:'right'});
+                        y+=25;
+                        
+                        doc.setFontSize(10); doc.setFont(undefined, 'italic');
+                        doc.text(`${numeroALetras(data.total)}`, 105, y, {align:'center'}); y+=10;
+                        
+                        if (data.cliente && data.cliente.id !== 1) {
+                             doc.setFont(undefined, 'normal');
+                             doc.text(`Puntos Ganados: ${puntosGanados}`, 20, y); 
+                             doc.text(`Nuevo Saldo: ${nuevosPuntos}`, 140, y);
+                             y+=10;
+                        }
+                        
+                        doc.setFont(undefined, 'bold');
+                        doc.text("¡GRACIAS POR SU PREFERENCIA!", 105, y, {align:'center'});
+                        
+                        doc.save(`Venta_${data.folio}.pdf`);
                      } else {
-                        const doc = new jsPDF({ unit: 'mm', format: [58, 240] });
+                        const doc = new jsPDF({ unit: 'mm', format: [58, 260] });
                         let y = 10;
                         doc.setFontSize(8); doc.text(config.EMPRESA, 29, y, { align: 'center', maxWidth: 50 }); y += 10;
                         doc.setFontSize(6);
                         doc.text(`RFC: ${config.RFC}`, 29, y, {align:'center'}); y+=3;
-                        doc.text(`Folio: ${folio}`, 2, y); y+=3;
-                        doc.text(new Date(fecha).toLocaleString(), 2, y); y+=6;
-                        if (renta > 0) { doc.text(`1 RENTA`, 2, y); doc.text(`$${renta.toFixed(2)}`, 56, y, {align:'right'}); y+=4; }
-                        eq.cuenta.forEach(i => {
-                            doc.text(`${i.cantidad} ${i.nombre.slice(0,15)}`, 2, y);
-                            doc.text(`$${(i.precio*i.cantidad).toFixed(2)}`, 56, y, {align:'right'});
+                        doc.text(`Folio: ${data.folio}`, 2, y); y+=3;
+                        doc.text(new Date(data.fecha).toLocaleString(), 2, y); y+=3;
+                        doc.text(`Cte: ${nombreCliente.slice(0,20)}`, 2, y); y+=6;
+                        
+                        // Encabezados Ticket
+                        doc.setFont(undefined, 'bold');
+                        doc.text('Cant. Des.           PU.   Imp.', 2, y); 
+                        doc.setFont(undefined, 'normal');
+                        y+=4;
+
+                        if (data.renta > 0) { 
+                            doc.text(`1     RENTA EQUIPO`, 2, y); 
+                            doc.text(`${data.renta.toFixed(2)}`, 42, y, {align:'right'});
+                            doc.text(`${data.renta.toFixed(2)}`, 56, y, {align:'right'}); 
+                            y+=4; 
+                        }
+                        data.items.forEach(i => {
+                            const name = i.nombre.slice(0,12);
+                            doc.text(`${i.cantidad}     ${name}`, 2, y);
+                            doc.text(`${i.precio.toFixed(2)}`, 42, y, {align:'right'});
+                            doc.text(`${(i.precio*i.cantidad).toFixed(2)}`, 56, y, {align:'right'});
                             y+=4;
                         });
+                        
+                        const subtotal = data.total / (1 + (config.IVA_RATE || 0.16));
+                        const iva = data.total - subtotal;
+
+                        y+=2;
+                        doc.text(`Subtotal: $${subtotal.toFixed(2)}`, 56, y, {align:'right'}); y+=3;
+                        doc.text(`IVA: $${iva.toFixed(2)}`, 56, y, {align:'right'}); y+=4;
+
                         doc.setFontSize(10); doc.setFont(undefined, 'bold');
-                        doc.text(`TOTAL: $${total.toFixed(2)}`, 56, y+5, {align:'right'});
-                        doc.save(`Ticket_${folio}.pdf`);
+                        doc.text(`TOTAL: $${data.total.toFixed(2)}`, 56, y+5, {align:'right'});
+                        y+=10;
+
+                        if (data.cliente && data.cliente.id !== 1) {
+                            doc.setFontSize(7);
+                            doc.text(`Pts: +${puntosGanados} | Saldo: ${nuevosPuntos}`, 29, y, {align:'center'}); y+=4;
+                        }
+
+                        doc.setFontSize(7);
+                        doc.text("¡GRACIAS POR SU PREFERENCIA!", 29, y, {align:'center'});
+                        doc.save(`Ticket_${data.folio}.pdf`);
                      }
                  } catch(e) { console.error(e); notify('Error PDF', 'error'); }
-
-                 if(targetId==='MOSTRADOR') setCarritoDirecto([]);
-                 else setEquipos(p => p.map(e => e.id === targetId ? {...e, estado:'libre', inicio:null, tiempoAcumulado:0, cuenta:[], modo: 'libre', limite: 0} : e));
-                 setActiveModal(null);
-            };
+            }
 
             const mover = (oId, dId) => {
                 setEquipos(prev => {
@@ -624,16 +781,103 @@
 
             const abrirCaja = (fondo) => {
                 const f = parseFloat(fondo) || 0;
-                setCaja({ activa: true, fondo: f, inicio: new Date().toISOString() });
-                setModal(null); setFondoInput(''); toast("Caja Abierta");
+                setCaja({ 
+                    activa: true, 
+                    fondo: f, 
+                    inicio: new Date().toISOString(), 
+                    usuarioId: user.id, 
+                    usuarioNombre: user.nombre 
+                });
+                
+                // Procesar acción pendiente si existe
+                if (pendingAction) {
+                    if (pendingAction.type === 'PREPAGO') {
+                         if (pendingAction.modeType === 'money') iniciarEquipoPorDinero(pendingAction.id, pendingAction.val);
+                         else iniciarEquipo(pendingAction.id, 'prepago', pendingAction.val);
+                    }
+                    setPendingAction(null); // Limpiar acción
+                }
+                
+                setActiveModal(null); setFondoInput(''); notify("Caja Abierta");
             };
 
+            const setModal = (name) => {
+                if (name === 'inventory' || name === 'sales' || name === 'move' || name === 'consumption' || name === 'checkout') {
+                    if (!caja.activa) {
+                         playSound('error');
+                         notify("¡Debes abrir la caja primero!", 'error');
+                         setActiveModal('abrir_caja');
+                         return;
+                    }
+                }
+                // Si es prepago, se maneja en el botón directamente con handlePrepaidAttempt para guardar la intención
+                setActiveModal(name);
+            };
+
+            // ... (resto de funciones: mover, cerrarTurno, exportarDatos, restaurarDatos...)
+            
             const cerrarTurno = () => {
                 if(!confirm("¿Cerrar turno?")) return;
-                setCaja({ activa: false, fondo: 0, inicio: null }); setModal(null); toast("Turno Cerrado");
+                const vts = ventas.filter(v => new Date(v.fecha) > new Date(caja.inicio));
+                generarReporteCaja(caja, vts, efectivoDeclarado);
+                setCaja({ activa: false, fondo: 0, inicio: null }); 
+                setActiveModal(null); 
+                notify("Turno Cerrado");
+            };
+            
+            const generarReporteCaja = (info, vts, declarado) => {
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF({ format: 'letter' });
+                const totalVentas = vts.reduce((a,b)=>a+b.total,0);
+                const subtotalVentas = totalVentas / (1 + (config.IVA_RATE || 0.16));
+                const ivaVentas = totalVentas - subtotalVentas;
+                
+                const totalEsperado = info.fondo + totalVentas;
+                const diferencia = (parseFloat(declarado) || 0) - totalEsperado;
+
+                doc.setFontSize(22); doc.setFont(undefined, 'bold');
+                doc.text(config.EMPRESA, 105, 20, { align: 'center' });
+                doc.setFontSize(14);
+                doc.text("CORTE DE CAJA", 105, 30, { align: 'center' });
+
+                doc.setFontSize(10); doc.setFont(undefined, 'normal');
+                doc.text(`Cajero: ${info.usuarioNombre || 'Desconocido'}`, 15, 45);
+                doc.text(`Inicio: ${new Date(info.inicio).toLocaleString()}`, 15, 50);
+                doc.text(`Fin: ${new Date().toLocaleString()}`, 15, 55);
+
+                doc.autoTable({
+                    startY: 65,
+                    head: [['CONCEPTO', 'IMPORTE']],
+                    body: [
+                        ['FONDO INICIAL', `$${info.fondo.toFixed(2)}`],
+                        ['VENTAS TOTALES', `$${totalVentas.toFixed(2)}`],
+                        [' - SUBTOTAL', `$${subtotalVentas.toFixed(2)}`],
+                        [' - IVA TRASLADADO', `$${ivaVentas.toFixed(2)}`],
+                        ['TOTAL ESPERADO', `$${totalEsperado.toFixed(2)}`],
+                        ['EFECTIVO REAL', `$${parseFloat(declarado).toFixed(2)}`],
+                        ['DIFERENCIA', `$${diferencia.toFixed(2)}`]
+                    ],
+                    theme: 'grid',
+                    columnStyles: { 1: { halign: 'right', fontStyle: 'bold' } }
+                });
+
+                doc.text("Detalle de Ventas", 15, doc.lastAutoTable.finalY + 15);
+                const rows = vts.map(v => [ v.folio, new Date(v.fecha).toLocaleTimeString(), v.cliente, `$${v.total.toFixed(2)}` ]);
+
+                doc.autoTable({
+                    startY: doc.lastAutoTable.finalY + 20,
+                    head: [['FOLIO', 'HORA', 'CLIENTE', 'TOTAL']],
+                    body: rows,
+                    theme: 'striped'
+                });
+
+                const pageHeight = doc.internal.pageSize.height;
+                doc.line(30, pageHeight - 40, 90, pageHeight - 40); doc.text("Firma Cajero", 60, pageHeight - 35, { align: 'center' });
+                doc.line(120, pageHeight - 40, 180, pageHeight - 40); doc.text("Firma Supervisor", 150, pageHeight - 35, { align: 'center' });
+
+                doc.save(`Corte_${new Date().toISOString().slice(0,10)}.pdf`);
             };
 
-            // Acciones de Respaldo y Restauración
             const exportarDatos = () => {
                 const blob = new Blob([JSON.stringify({ config, printSettings, usuarios, equipos, catalogo, clientes, ventas, caja, servicios, carritoDirecto })], { type: "application/json" });
                 const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `backup_chronus_${Date.now()}.json`; a.click();
@@ -651,24 +895,15 @@
                         if(d.equipos) setEquipos(d.equipos);
                         if(d.servicios) setServicios(d.servicios);
                         if(d.clientes) setClientes(d.clientes);
-                        toast("Restaurado"); 
+                        notify("Restaurado"); 
                     }
                 };
                 reader.readAsText(file);
             };
-            
-            const setModal = (name) => {
-                // Interceptores de seguridad
-                if (name === 'inventory' || name === 'sales' || name === 'move' || name === 'consumption' || name === 'checkout') {
-                    if (!caja.activa) {
-                         // Si la caja NO está activa, obligar a abrirla
-                         playSound('error');
-                         notify("¡Debes abrir la caja primero!", 'error');
-                         setActiveModal('abrir_caja');
-                         return;
-                    }
-                }
-                setActiveModal(name);
+
+            const solicitarCierreCaja = () => {
+                setEfectivoDeclarado('');
+                setActiveModal('cierre_caja');
             };
 
 
@@ -695,10 +930,9 @@
                             const labelTotal = isPrepago ? 'COBRADO' : 'TOTAL';
                             const colorTotal = isPrepago ? 'text-emerald-400' : 'text-slate-800';
 
-                            // Calculo de tiempo restante para prepago
                             let tiempoRestanteDisplay = '--:--:--';
                             if (isPrepago) {
-                                const totalElapsed = ms; // ms ya incluye el acumulado
+                                const totalElapsed = ms; 
                                 const remaining = Math.max(0, (eq.limite || 0) - totalElapsed);
                                 tiempoRestanteDisplay = new Date(remaining).toISOString().slice(11,19);
                             } else {
@@ -716,7 +950,7 @@
                                             {eq.estado==='libre' ? 
                                             <>
                                                 <button onClick={()=>iniciar(eq.id)} className="col-span-1 bg-indigo-600 text-white py-3 rounded-xl font-bold text-xs hover:bg-indigo-700 btn-press uppercase">LIBRE</button>
-                                                <button onClick={()=>{playSound('click'); setTargetId(eq.id); setModal('prepago'); setMinCustom(''); setDineroPrepago('');}} className="col-span-1 bg-slate-800 text-white py-3 rounded-xl font-bold text-xs hover:bg-black btn-press uppercase">PREPAGO</button>
+                                                <button onClick={()=>{playSound('click'); setTargetId(eq.id); setActiveModal('prepago'); setMinCustom(''); setDineroPrepago('');}} className="col-span-1 bg-slate-800 text-white py-3 rounded-xl font-bold text-xs hover:bg-black btn-press uppercase">PREPAGO</button>
                                             </>
                                             : 
                                             <>
@@ -732,8 +966,8 @@
                                                      <button onClick={()=>procesarCobro(eq.id)} className="py-3 bg-emerald-600 text-white rounded-xl font-bold text-xs hover:bg-emerald-700 btn-press">COBRAR</button>
                                                 )}
 
-                                                <button onClick={()=>{setTargetId(eq.id); setModal('consumption')}} className={`col-span-1 py-2 rounded-xl font-bold text-[10px] uppercase ${isPrepago?'bg-slate-700 text-white hover:bg-slate-600':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Consumo</button>
-                                                <button onClick={()=>{setTargetId(eq.id); setModal('move')}} className={`col-span-1 py-2 rounded-xl font-bold text-[10px] uppercase ${isPrepago?'bg-slate-700 text-white hover:bg-slate-600':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Mover</button>
+                                                <button onClick={()=>{setTargetId(eq.id); setActiveModal('consumption')}} className={`col-span-1 py-2 rounded-xl font-bold text-[10px] uppercase ${isPrepago?'bg-slate-700 text-white hover:bg-slate-600':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Consumo</button>
+                                                <button onClick={()=>{setTargetId(eq.id); setActiveModal('move')}} className={`col-span-1 py-2 rounded-xl font-bold text-[10px] uppercase ${isPrepago?'bg-slate-700 text-white hover:bg-slate-600':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Mover</button>
                                             </>}
                                         </div>
                                     </div>
@@ -743,7 +977,7 @@
                         })}
                     </main>
                     {activeModal === 'inventory' && <InventoryModule onClose={()=>setActiveModal(null)} catalogo={catalogo} setCatalogo={setCatalogo} notify={notify} />}
-                    {activeModal === 'sales' && <SalesModule onClose={()=>setActiveModal(null)} catalogo={catalogo} onCobrar={({id, cuenta, clienteId}) => { setTargetId(id); setCarritoDirecto(cuenta); setActiveModal('checkout'); }} servicios={servicios} clientes={clientes} setClientes={setClientes} />}
+                    {activeModal === 'sales' && <SalesModule onClose={()=>setActiveModal(null)} catalogo={catalogo} onCobrar={({id, cuenta, clienteId}) => { setTargetId(id); setCarritoDirecto(cuenta); setActiveModal('checkout'); setCheckoutClient(clienteId); }} servicios={servicios} clientes={clientes} setClientes={setClientes} carrito={carritoDirecto} setCarrito={setCarritoDirecto} />}
                     {activeModal === 'admin' && <AdminModule onClose={()=>setActiveModal(null)} config={config} setConfig={setConfig} equipos={equipos} setEquipos={setEquipos} usuarios={usuarios} setUsuarios={setUsuarios} clientes={clientes} setClientes={setClientes} servicios={servicios} setServicios={setServicios} onExport={exportarDatos} onImport={restaurarDatos} />}
                     {activeModal === 'consumption' && targetId && <ConsumptionModule onClose={()=>setActiveModal(null)} terminal={equipos.find(e=>e.id===targetId)} catalogo={catalogo} setEquipos={setEquipos} printSettings={printSettings} notify={notify} servicios={servicios} clientes={clientes} setClientes={setClientes} />}
                     {activeModal === 'move' && targetId && <Modal onClose={()=>setActiveModal(null)}><div className="bg-white rounded-3xl w-full max-w-sm p-6 text-center shadow-xl"><h3 className="font-black text-xl mb-4">Mover Sesión</h3><div className="grid grid-cols-2 gap-3 mb-6">{equipos.filter(e=>e.estado==='libre').map(e=><button key={e.id} onClick={()=>mover(targetId, e.id)} className="p-4 bg-slate-50 border rounded-xl font-bold text-xs hover:bg-indigo-600 hover:text-white uppercase">{e.nombre}</button>)}</div><button onClick={()=>setActiveModal(null)} className="text-slate-400 font-bold text-xs uppercase">Cancelar</button></div></Modal>}
@@ -780,7 +1014,7 @@
                                     const totalProd = eq.cuenta.reduce((a,b)=>a+(b.precio*b.cantidad),0);
                                     let total = Math.round(renta + totalProd);
                                     
-                                    const cId = targetId === 'MOSTRADOR' ? (eq.clienteId || 1) : eq.clienteId; 
+                                    const cId = targetId === 'MOSTRADOR' ? checkoutClient : (eq.clienteId || 1); 
                                     const cliente = clientes.find(c => c.id === parseInt(cId)) || clientes[0];
                                     const canRedeem = cliente.id !== 1 && cliente.puntos >= POINTS_REDEEM_THRESHOLD;
 
@@ -789,6 +1023,15 @@
                                     const pago = parseFloat(pagoCheckout) || 0;
                                     return (
                                         <div className="space-y-6">
+                                            {targetId === 'MOSTRADOR' && (
+                                                <div className="mb-4">
+                                                     <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Cliente a Facturar</label>
+                                                     <select className="w-full p-2 border rounded-xl text-sm font-bold bg-slate-50 outline-none" value={checkoutClient} onChange={e=>setCheckoutClient(e.target.value)}>
+                                                         {clientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                                                     </select>
+                                                </div>
+                                            )}
+
                                             <div className="bg-slate-800 p-6 rounded-2xl text-center text-white relative">
                                                 <p className="text-xs uppercase mb-2">Total a Pagar</p>
                                                 <h3 className="text-5xl font-black">${total.toFixed(2)}</h3>
@@ -807,10 +1050,13 @@
                     {activeModal === 'abrir_caja' && (
                         <Modal onClose={()=>setActiveModal(null)}>
                             <div className="bg-white rounded-3xl w-full max-w-md p-8 text-slate-800 shadow-2xl">
-                                <h3 className="text-2xl font-black mb-4">Apertura de Turno</h3>
+                                <h3 className="text-2xl font-black mb-4">
+                                    {pendingAction ? "Abre la Caja para Continuar" : "Apertura de Turno"}
+                                </h3>
+                                {pendingAction && <p className="text-xs text-indigo-500 mb-4 font-bold bg-indigo-50 p-2 rounded-lg">⚠️ Se detectó un cobro pendiente. Se sumará al corte al abrir.</p>}
                                 <input type="number" value={fondoInput} onChange={e=>setFondoInput(e.target.value)} className="w-full border-2 border-slate-200 p-5 rounded-2xl text-4xl font-black mb-6 outline-none focus:border-indigo-500 transition-all bg-slate-50 shadow-inner" placeholder="0.00" autoFocus />
                                 <div className="flex gap-4">
-                                    <button onClick={()=>setActiveModal(null)} className="flex-1 py-4 font-bold text-slate-400 rounded-2xl hover:bg-slate-100 transition-colors">Cancelar</button>
+                                    <button onClick={()=>{setPendingAction(null); setActiveModal(null)}} className="flex-1 py-4 font-bold text-slate-400 rounded-2xl hover:bg-slate-100 transition-colors">Cancelar</button>
                                     <button onClick={()=>abrirCaja(fondoInput)} className="flex-1 bg-indigo-600 text-white py-4 rounded-2xl font-black shadow-lg">ABRIR</button>
                                 </div>
                             </div>
@@ -829,7 +1075,24 @@
                                 </div>
                                 <div className="flex gap-4">
                                     <button onClick={()=>setActiveModal(null)} className="flex-1 py-4 font-bold text-slate-400 rounded-2xl hover:bg-slate-100 transition-colors">Volver</button>
-                                    <button onClick={cerrarTurno} className="flex-1 bg-rose-600 text-white rounded-xl font-black shadow-lg hover:bg-rose-700 transition-all uppercase text-xs tracking-widest">Cerrar Turno</button>
+                                    <button onClick={solicitarCierreCaja} className="flex-1 bg-rose-600 text-white rounded-xl font-black shadow-lg hover:bg-rose-700 transition-all uppercase text-xs tracking-widest">Cerrar Turno</button>
+                                </div>
+                            </div>
+                        </Modal>
+                    )}
+                    
+                    {activeModal === 'cierre_caja' && (
+                        <Modal onClose={()=>setActiveModal(null)}>
+                            <div className="bg-white rounded-3xl w-full max-w-md p-8 text-center shadow-2xl">
+                                <h3 className="text-2xl font-black mb-6">Cierre de Caja</h3>
+                                <div className="mb-6 text-left">
+                                    <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Efectivo en Caja (Real)</label>
+                                    <input type="number" className="w-full border-2 p-4 rounded-xl text-2xl font-bold" autoFocus placeholder="0.00" value={efectivoDeclarado} onChange={e=>setEfectivoDeclarado(e.target.value)} />
+                                    <p className="text-[10px] text-slate-400 mt-2">Ingresa la cantidad total de dinero que hay físicamente en la caja.</p>
+                                </div>
+                                <div className="flex gap-4">
+                                    <button onClick={()=>setActiveModal('caja')} className="flex-1 py-4 font-bold text-slate-400 rounded-2xl hover:bg-slate-100">Atrás</button>
+                                    <button onClick={cerrarTurno} className="flex-1 bg-emerald-600 text-white rounded-xl font-black shadow-lg hover:bg-emerald-700">FINALIZAR E IMPRIMIR</button>
                                 </div>
                             </div>
                         </Modal>
@@ -843,7 +1106,7 @@
                                 <p className="text-xs font-bold text-slate-400 uppercase mb-8 tracking-widest">Terminal: {equipos.find(e=>e.id===targetId)?.nombre}</p>
                                 <div className="grid grid-cols-3 gap-3 mb-6">
                                     {[15,30,60,90,120,180].map(m => (
-                                        <button key={m} onClick={() => iniciarEquipo(targetId, 'prepago', m)} className="bg-slate-50 border border-slate-100 hover:bg-indigo-600 hover:text-white py-4 rounded-2xl font-black text-sm transition-all shadow-sm active:scale-95">{m} min</button>
+                                        <button key={m} onClick={() => handlePrepaidAttempt(targetId, 'time', m)} className="bg-slate-50 border border-slate-100 hover:bg-indigo-600 hover:text-white py-4 rounded-2xl font-black text-sm transition-all shadow-sm active:scale-95">{m} min</button>
                                     ))}
                                 </div>
                                 <div className="mb-6 pt-6 border-t border-slate-100 text-left">
@@ -853,7 +1116,7 @@
                                             <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-slate-400">$</span>
                                             <input type="number" value={dineroPrepago} onChange={e=>setDineroPrepago(e.target.value)} className="w-full border-2 border-slate-100 p-4 pl-8 rounded-2xl font-black outline-none focus:border-emerald-400 bg-slate-50 shadow-inner text-emerald-600" placeholder="0.00" />
                                         </div>
-                                        <button onClick={() => iniciarEquipoPorDinero(targetId, dineroPrepago)} className="bg-emerald-600 text-white px-6 rounded-2xl font-black shadow-lg shadow-emerald-100 hover:bg-emerald-700 active:scale-95 transition-all"><Icon name="Check" size={20}/></button>
+                                        <button onClick={() => handlePrepaidAttempt(targetId, 'money', dineroPrepago)} className="bg-emerald-600 text-white px-6 rounded-2xl font-black shadow-lg shadow-emerald-100 hover:bg-emerald-700 active:scale-95 transition-all"><Icon name="Check" size={20}/></button>
                                     </div>
                                     {dineroPrepago && <p className="text-[10px] font-bold text-emerald-500 mt-2 text-right">≈ {((parseFloat(dineroPrepago) / equipos.find(e=>e.id===targetId).precioHora) * 60).toFixed(0)} minutos</p>}
                                 </div>
@@ -861,7 +1124,7 @@
                                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Manual (Min)</label>
                                     <div className="flex gap-2">
                                         <input type="number" value={minCustom} onChange={e=>setMinCustom(e.target.value)} className="flex-1 border-2 border-slate-100 p-4 rounded-2xl font-black outline-none focus:border-indigo-400 bg-slate-50 shadow-inner" placeholder="0" />
-                                        <button onClick={() => iniciarEquipo(targetId, 'prepago', minCustom)} className="bg-indigo-600 text-white px-8 rounded-2xl font-black shadow-lg shadow-indigo-100 hover:bg-indigo-700 active:scale-95 transition-all">OK</button>
+                                        <button onClick={() => handlePrepaidAttempt(targetId, 'time', minCustom)} className="bg-indigo-600 text-white px-8 rounded-2xl font-black shadow-lg shadow-indigo-100 hover:bg-indigo-700 active:scale-95 transition-all">OK</button>
                                     </div>
                                 </div>
                                 <button onClick={() => setActiveModal(null)} className="mt-8 text-slate-300 hover:text-slate-500 font-bold text-xs transition-colors tracking-widest uppercase">Cancelar</button>
