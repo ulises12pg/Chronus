@@ -732,6 +732,8 @@
                         doc.setFontSize(8); doc.text(config.EMPRESA, 29, y, { align: 'center', maxWidth: 50 }); y += 10;
                         doc.setFontSize(6);
                         doc.text(`RFC: ${config.RFC}`, 29, y, {align:'center'}); y+=3;
+                        doc.text(`${config.REGIMEN}`, 29, y, {align:'center', maxWidth: 50}); y+=3;
+                        doc.text(`${config.LUGAR_EXPEDICION}`, 29, y, {align:'center', maxWidth: 50}); y+=3;
                         doc.text(`Folio: ${data.folio}`, 2, y); y+=3;
                         doc.text(new Date(data.fecha).toLocaleString(), 2, y); y+=3;
                         doc.text(`Cte: ${nombreCliente.slice(0,20)}`, 2, y); y+=6;
