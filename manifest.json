@@ -2,7 +2,7 @@
   "name": "Chronus Punto de Venta",
   "short_name": "Chronus",
   "start_url": "./index.html",
-  "id": "/index.html",
+  "id": "./index.html",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#4f46e5",
